@@ -404,7 +404,7 @@ devmem 0x8FF1001C 32   # 4 byte RX vừa thu về từ SDI (giống hệt 0x8FF1
 
 ---
 
-## 5. Kết quả Thực nghiệm Thực tế trên Board (`root@192.168.1.38`)
+## 5. Kết quả Thực nghiệm Thực tế trên Board 
 
 Output thực tế thu được sau khi nạp firmware đã mở khóa MIPI DSI D-PHY GPO/GPI và nối `B3 <-> B4` trên IC Buffer:
 

@@ -392,4 +392,4 @@ Ngăn xếp driver từ **Tầng 0 đến Tầng 2** đã chính thức hoàn th
 2. Đã xác thực thực tế trên dây nối vật lý với STM32F103 Slave: **Tỷ lệ gói tin hợp lệ đạt 100% qua hàng trăm chu kỳ**.
 3. Cơ chế Telemetry và truyền thông liên nhân Zero-Copy qua **DDR `0x8FF20000`** đã hoạt động trơn tru.
 
-Mã nguồn đã sẵn sàng 100% để bạn bước vào **Giai đoạn tiếp theo: Tích hợp Tầng 3 (Giao thức VoSPI đọc dữ liệu ảnh nhiệt và I2C cấu hình cho module camera Tiny1C)**.
+**Giai đoạn tiếp theo: Tích hợp Tầng 3 (Giao thức VoSPI đọc dữ liệu ảnh nhiệt và I2C cấu hình cho module camera Tiny1C)**.
