@@ -206,50 +206,5 @@ Một frame VOSPI tiêu chuẩn bao gồm:
    * Đọc phiên bản Firmware đang chạy (Firmware Version).
    * Đọc số Serial Number (SN) của module.
 
----
 
-## 9. NHÓM TÍNH NĂNG 8: TÍCH HỢP HỆ THỐNG ĐA NHÂN & TRÍ TUỆ NHÂN TẠO (AI/ML & IPC PIPELINE)
 
-### 9.1. Giao tiếp Đa nhân Heterogeneous Dual-Core (RTOS Core $\leftrightarrow$ Linux Core)
-* Được tối ưu hóa chuyên biệt trong thư mục [RTOS_V1](file:///home/duong/Workspace/Back-up/Tiny1C-SDK-Backup/Tiny1C-SDK/ASIC_2121W_RTOS_SDK_V1.0.0_release/RTOS_V1):
-  * **Bộ nhớ chia sẻ Shared DDR RAM (`0x8FE80000`)**: Cấu trúc dữ liệu chuẩn `shared_data_t` chứa Magic `0x54494E59`, địa chỉ khung hình RAW, chế độ hoạt động, ma trận kết quả 64 cell và thời gian thực.
-  * **Đồng bộ bộ nhớ đệm (Cache Coherency)**: Tự động thực hiện Flush D-Cache C906L (`flush_dcache_range` căn chỉnh 64-byte) và rào cản bộ nhớ `fence rw, rw` trước khi phát ngắt.
-  * **Giao tiếp Mailbox IPC**:
-    * Chiều RTOS $\rightarrow$ Linux: Bắn ngắt Mailbox (`CMD_THERMAL_GRID_READY`, `CMD_THERMAL_ALARM_ALERT`) qua `cvi_rtos_send_cmdqu` và hàng đợi `E_QUEUE_CMDQU`.
-    * Chiều Linux $\rightarrow$ RTOS: Tiếp nhận lệnh qua `E_QUEUE_CAMERA` (`CMD_THERMAL_SHUTTER_REQ` đóng trập NUC, `CMD_THERMAL_SET_MODE` đổi chế độ ảnh).
-
-### 9.2. Chuỗi Xử lý Phát hiện Cháy & Phân tích Nhiệt 2 Giai đoạn (NPU AI Pipelines)
-* Triển khai trong các module `test_v1`, `test_v2`, `test_v3`, `model_ml1`:
-  * **Giai đoạn 1 (Spatial Feature Extractor - 1 Hz)**:
-    * Chạy mô hình lượng tử hóa BF16 trên NPU Sophgo TPU (`thermal_feature_extractor_8x8_cv181x_bf16.cvimodel`).
-    * Trích xuất ma trận tensor $[1, 3, 8, 8]$: Kênh 0 = $T_{\text{avg}}$, Kênh 1 = $T_{\text{max}}$, Kênh 2 = $\Delta T$.
-    * Phân tích 64 ô lưới Cell kết hợp với 1 chỉ số bức xạ toàn cảnh (Đánh giá 64+1).
-  * **Giai đoạn 2 (Temporal Aggregator & Risk Classifier - 0.2 Hz)**:
-    * Gom cụm 5 frame liên tiếp ($5\,\text{s}$) để tính toán động học ngọn lửa:
-      * Tốc độ gia nhiệt bậc một: $\frac{dT}{dt}$ ($^\circ\text{C/s}$).
-      * Gia tốc gia nhiệt bậc hai: $\frac{d^2T}{dt^2}$.
-      * Gradient không gian: $|\nabla T|$ và phương sai nhiệt độ toàn cảnh $\sigma^2$.
-    * Đưa ra phân loại 3 mức rủi ro: **SAFE** (An toàn), **SUSPECT** (Nghi ngờ), **FIRE ALARM** (Báo cháy khẩn cấp).
-  * **Mô phỏng & Replay Kịch bản Cháy (`replay_fire.py`, `generate_dataset.py`)**:
-    * Cung cấp công cụ mô phỏng dữ liệu nhiệt độ không cần phần cứng camera thật để phục vụ kiểm thử đơn vị và benchmark trên máy trạm x86 hoặc trực tiếp trên bo mạch.
-
----
-
-## 10. BẢNG TỔNG HỢP ÁNH XẠ CHỨC NĂNG & TẬP TIN MÃ NGUỒN
-
-| Hạng Mục Tính Năng | Tập Tin Mã Nguồn / Tài Liệu | API / Hàm Chức Năng Tiêu Biểu |
-| :--- | :--- | :--- |
-| **Giao thức VOSPI** | `stream_spi.h`, `stream_spi.c`, `hal_spi0_dsi.c` | `spi_stream_init`, `spi_get_frame`, `spi0_dsi_transfer_burst` |
-| **Giao thức I2C / VDCMD** | `data_rw.h`, `data_rw.c`, `vdcmd.h`, `vdcmd.c` | `data_rw_i2c_hw_init`, `short_cmd_write`, `standard_cmd_read`, `long_cmd_read` |
-| **Luồng Video & Màn trập** | `falcon_cmd.h`, `falcon_cmd.c`, `core.c` | `preview_start`, `y16_preview_start`, `ooc_b_update`, `set_prop_auto_shutter_params` |
-| **Chống kẹt màn trập** | `falcon_cmd.h`, `falcon_cmd.c` | `SHUTTER_PROP_PROTECT_SWITCH`, `SHUTTER_PROTECT_THR_HIGH_GAIN` |
-| **Đo nhiệt độ (TPD)** | `falcon_cmd.h`, `falcon_cmd.c` | `tpd_get_max_min_temp_info`, `tpd_get_point_temp_info`, `tpd_get_rect_temp_info` |
-| **Lưới Cell 8x8 & Báo động** | `grid.h`, `grid.c`, `main.c` | `grid_process_2d`, `grid_check_2d`, `thermal_camera_task` |
-| **Bảng màu & Zoom ảnh** | `falcon_cmd.h`, `falcon_cmd.c` | `pseudo_color_set`, `zoom_center_up`, `zoom_position_up` |
-| **Hiệu chuẩn Điểm mù (DPC)** | `falcon_cmd.h`, `Dead pixel correction/` | `dpc_auto_calibration`, `dpc_add_point`, `dpc_remove_point` |
-| **Hiệu chuẩn Nhiễu nắp che** | `falcon_cmd.h`, `Lid pattern noise/` | `rmcover_auto_calc`, `rmcover_sts_switch` |
-| **Hiệu chuẩn Thứ cấp** | `falcon_cmd.h`, `Secondary calibration/` | `tpd_ktbt_recal_1point`, `tpd_ktbt_recal_2point` |
-| **Bù sai số Môi trường** | `temperature.h`, `temperature.c`, `libirtemp.h` | `calculate_org_env_cali_parameter`, `calculate_new_env_cali_parameter` |
-| **Nâng cấp Firmware** | `firmware.h`, `firmware.c` | `update_firmware`, `sys_reset_to_rom`, `spi_erase_sector` |
-| **Liên kết Đa nhân IPC** | `ipc.h`, `ipc.c` | `ipc_init`, `ipc_notify_grid_ready`, `ipc_notify_alarm`, `ipc_process_linux_cmds` |
-| **Mô hình NPU & AI Pipeline** | `test_v1/`, `test_v2/`, `test_v3/` | `integrated_pipeline.py`, `ml1_pipeline.py`, `test_pipeline.py` |
