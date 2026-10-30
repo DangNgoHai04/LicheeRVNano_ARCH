@@ -4,7 +4,7 @@
 > 1. Tài liệu nhà sản xuất: `RTOS平台SPI接口软件开发资料 Interface development instructionsV1.0.docx`
 > 2. Bảng mô tả hàm SDK: `Tiny1C模组SDK接口说明Interface Description1.2.xlsx`
 > 3. Hướng dẫn hiệu chuẩn: `用户开发标定 User calibration instructions`
-> 4. Toàn bộ mã nguồn C & Python SDK: `Tiny1C_STM32_SPI_SDK`, `RTOS_V1`, `test_v1`, `test_v2`, `test_v3`, `model_ml1`
+> 4. Mã nguồn C & SDK: `Tiny1C_STM32_SPI_SDK`, `RTOS_SPI`
 
 ---
 
@@ -112,7 +112,7 @@ Một frame VOSPI tiêu chuẩn bao gồm:
 
 ---
 
-## 5. NHÓM TÍNH NĂNG 4: ĐO NHIỆT ĐỘ CHUYÊN NGHIỆP (TPD - TEMPERATURE MEASUREMENT)
+## 5. NHÓM TÍNH NĂNG 4: ĐO NHIỆT ĐỘ (TPD - TEMPERATURE MEASUREMENT)
 
 ### 5.1. Đo nhiệt độ cực trị toàn khung
 * **`tpd_get_max_min_temp_info`**: Truy vấn đồng thời nhiệt độ cao nhất ($T_{\text{max}}$), nhiệt độ thấp nhất ($T_{\text{min}}$) toàn khung cùng với tọa độ pixel chính xác $(X_{\text{max}}, Y_{\text{max}})$ và $(X_{\text{min}}, Y_{\text{min}})$.
@@ -130,50 +130,30 @@ Một frame VOSPI tiêu chuẩn bao gồm:
   * Điểm lạnh nhất trong vùng ($T_{\text{min}}$, $X_{\text{min}}, Y_{\text{min}}$).
 * **Cảnh báo vượt ngưỡng vùng (`tpd_set_rect_temp_thd`)**: Đặt ngưỡng cảnh báo quá nhiệt cho từng khung đo hình chữ nhật.
 
-### 5.3. Xử lý phân tích Lưới 2 Chiều 8×8 (Grid 64 Cells - Realtime Edge AI)
-* Hiện thực trong module `grid.c` / `grid.h` của `RTOS_V1`:
-  * Chia ma trận $256 \times 192$ thành **64 ô Cell** ($8 \times 8$), mỗi ô quản lý khối $32 \times 24 = 768$ pixels.
-  * Mỗi Cell tính toán độc lập: $T_{\text{avg}}$, $T_{\text{max}}$, $T_{\text{min}}$, tọa độ điểm nóng cục bộ, và **tốc độ biến thiên nhiệt $\Delta T$** so với khung hình trước đó.
-  * Theo dõi nhãn thời gian thực `frame_time_t` (Giờ, Phút, Giây, Mili-giây, Số thứ tự Frame).
-  * Tự động quét kiểm tra mảng 2 chiều và phát cờ báo động `alarm_active` khi có Cell vượt ngưỡng nhiệt định trước (mặc định $70.0^\circ\text{C}$).
 
 ---
 
-## 6. NHÓM TÍNH NĂNG 5: XỬ LÝ HÌNH ẢNH & ISP (IMAGE ENHANCEMENT)
 
-1. **Bảng màu giả ngoại vi (Pseudo-Color / Palette Selection)**:
-   * Chức năng: `pseudo_color_set(PREVIEW_PATH0, color_type)` / `pseudo_color_get`.
-   * Hỗ trợ **11 chế độ bảng màu giả lập** chuyên dụng cho cứu hỏa, quân sự và kiểm tra công nghiệp: White Hot, Black Hot, Ironbow, Rainbow, High Contrast Rainbow, Amber, v.v.
-2. **Thu phóng kỹ thuật số (Digital Zoom)**:
-   * **Zoom trung tâm**: `zoom_center_up` (Phóng to từ tâm), `zoom_center_down` (Thu nhỏ về tâm).
-   * **Zoom theo tọa độ tùy chọn**: `zoom_position_up`, `zoom_position_down` (Phóng to/thu nhỏ tập trung vào một đối tượng quan tâm tại vị trí $X, Y$).
-   * Tỉ lệ bước phóng tùy chỉnh theo các nấc bước (Scale steps).
-3. **Cân chỉnh chất lượng hình ảnh (Image ISP Tuning)**:
-   * Hàm: `set_prop_image_params` / `get_prop_image_params`.
-   * Tinh chỉnh: Độ sáng (Brightness), Độ tương phản (Contrast), Tăng cường chi tiết (Detail Enhancement), Khử nhiễu không gian (Spatial Denoise).
+## 6. NHÓM TÍNH NĂNG 5: CĂN CHỈNH & HIỆU CHUẨN THIẾT BỊ (CALIBRATION)
 
----
-
-## 7. NHÓM TÍNH NĂNG 6: CĂN CHỈNH & HIỆU CHUẨN THIẾT BỊ (CALIBRATION)
-
-### 7.1. Hiệu chuẩn Điểm mù / Điểm chết (Dead Pixel Correction - DPC)
+### 6.1. Hiệu chuẩn Điểm mù / Điểm chết (Dead Pixel Correction - DPC)
 * Hiện tượng: Cảm biến vi nhiệt kế sau thời gian sử dụng, va đập hoặc nhiễm tĩnh điện ESD có thể xuất hiện các pixel hỏng (luôn quá sáng hoặc quá tối).
 * Phương thức xử lý:
   1. **Hiệu chuẩn tự động (`dpc_auto_calibration`)**: Chip tự động thống kê và nội suy bù trừ các pixel bất thường. Thời gian cấu hình càng dài, độ chính xác càng cao.
   2. **Thêm/xóa thủ công (`dpc_add_point`, `dpc_remove_point`)**: Cho phép người dùng nhập trực tiếp tọa độ $(X, Y)$ của điểm lỗi vào bảng Dead Pixel Table trong Flash.
 
-### 7.2. Hiệu chuẩn Nhiễu Nắp che / Quang sai vỏ (Lid Pattern Noise / Rim Cover - 锅盖标定)
+### 6.2. Hiệu chuẩn Nhiễu Nắp che / Quang sai vỏ (Lid Pattern Noise / Rim Cover - 锅盖标定)
 * Mục đích: Khử nhiễu vân vòng tròn đồng tâm sinh ra do phản xạ nhiệt từ vỏ ống kính, vòng ren hoặc nắp che bảo vệ.
 * Thao tác: Đặt tấm kim loại phẳng đen mờ (Anodized matte aluminum) cách ống kính $\approx 5\,\text{mm}$ ở nhiệt độ phòng.
 * Lệnh thực hiện: Gọi `rmcover_auto_calc` (thời gian tính toán khoảng $5\,\text{s}$), bật/tắt hiệu ứng bằng `rmcover_sts_switch`.
 
-### 7.3. Hiệu chuẩn Đo nhiệt Thứ cấp (Secondary Radiometric Calibration - 二次标定)
+### 6.3. Hiệu chuẩn Đo nhiệt Thứ cấp (Secondary Radiometric Calibration - 二次标定)
 * Mục đích: Bù trừ sai số nhiệt độ sau khi module được tích hợp vào cụm vỏ thiết bị thương mại hoàn chỉnh (có lắp thêm kính bảo vệ Germanium/Chalcogenide hoặc thay đổi phân bố tản nhiệt).
 * Phương thức:
   1. **Hiệu chuẩn 1 điểm (`tpd_ktbt_recal_1point`)**: Đưa nguồn nhiệt chuẩn (Blackbody) vào tầm nhìn, gọi lệnh cân chỉnh một mức nhiệt. Thời gian xử lý khoảng $5\sim 10\,\text{s}$.
   2. **Hiệu chuẩn 2 điểm (`tpd_ktbt_recal_2point`)**: Dùng 2 nhiệt độ Blackbody chuẩn (nhiệt độ thấp $T_1$ và nhiệt độ cao $T_2$) để hiệu chỉnh toàn bộ đường cong độ dốc $K$ và độ lệch $B$. Thời gian xử lý khoảng $15\,\text{s}$. Dữ liệu ghi trực tiếp vào Flash.
 
-### 7.4. Hiệu chỉnh Biến số Môi trường (Ambient Variable Correction)
+### 6.4. Hiệu chỉnh Biến số Môi trường (Ambient Variable Correction)
 * Các tham số môi trường ảnh hưởng đến kết quả đo nhiệt hồng ngoại:
   * Hệ số phát xạ bề mặt vật thể ($\varepsilon$ - Emissivity, từ 0.01 đến 1.00).
   * Khoảng cách đến mục tiêu ($d$ - Target Distance, mét).
@@ -185,7 +165,7 @@ Một frame VOSPI tiêu chuẩn bao gồm:
 
 ---
 
-## 8. NHÓM TÍNH NĂNG 7: QUẢN TRỊ HỆ THỐNG & CẬP NHẬT FIRMWARE (SYSTEM & OTA)
+## 7. NHÓM TÍNH NĂNG 6: QUẢN TRỊ HỆ THỐNG & CẬP NHẬT FIRMWARE (SYSTEM & OTA)
 
 1. **Nâng cấp Firmware từ xa qua I2C (`update_firmware`)**:
    * Hỗ trợ đọc file nhị phân firmware từ hệ thống tập tin (FATFS / SD Card) và nạp qua I2C.
@@ -206,50 +186,5 @@ Một frame VOSPI tiêu chuẩn bao gồm:
    * Đọc phiên bản Firmware đang chạy (Firmware Version).
    * Đọc số Serial Number (SN) của module.
 
----
 
-## 9. NHÓM TÍNH NĂNG 8: TÍCH HỢP HỆ THỐNG ĐA NHÂN & TRÍ TUỆ NHÂN TẠO (AI/ML & IPC PIPELINE)
 
-### 9.1. Giao tiếp Đa nhân Heterogeneous Dual-Core (RTOS Core $\leftrightarrow$ Linux Core)
-* Được tối ưu hóa chuyên biệt trong thư mục [RTOS_V1](file:///home/duong/Workspace/Back-up/Tiny1C-SDK-Backup/Tiny1C-SDK/ASIC_2121W_RTOS_SDK_V1.0.0_release/RTOS_V1):
-  * **Bộ nhớ chia sẻ Shared DDR RAM (`0x8FE80000`)**: Cấu trúc dữ liệu chuẩn `shared_data_t` chứa Magic `0x54494E59`, địa chỉ khung hình RAW, chế độ hoạt động, ma trận kết quả 64 cell và thời gian thực.
-  * **Đồng bộ bộ nhớ đệm (Cache Coherency)**: Tự động thực hiện Flush D-Cache C906L (`flush_dcache_range` căn chỉnh 64-byte) và rào cản bộ nhớ `fence rw, rw` trước khi phát ngắt.
-  * **Giao tiếp Mailbox IPC**:
-    * Chiều RTOS $\rightarrow$ Linux: Bắn ngắt Mailbox (`CMD_THERMAL_GRID_READY`, `CMD_THERMAL_ALARM_ALERT`) qua `cvi_rtos_send_cmdqu` và hàng đợi `E_QUEUE_CMDQU`.
-    * Chiều Linux $\rightarrow$ RTOS: Tiếp nhận lệnh qua `E_QUEUE_CAMERA` (`CMD_THERMAL_SHUTTER_REQ` đóng trập NUC, `CMD_THERMAL_SET_MODE` đổi chế độ ảnh).
-
-### 9.2. Chuỗi Xử lý Phát hiện Cháy & Phân tích Nhiệt 2 Giai đoạn (NPU AI Pipelines)
-* Triển khai trong các module `test_v1`, `test_v2`, `test_v3`, `model_ml1`:
-  * **Giai đoạn 1 (Spatial Feature Extractor - 1 Hz)**:
-    * Chạy mô hình lượng tử hóa BF16 trên NPU Sophgo TPU (`thermal_feature_extractor_8x8_cv181x_bf16.cvimodel`).
-    * Trích xuất ma trận tensor $[1, 3, 8, 8]$: Kênh 0 = $T_{\text{avg}}$, Kênh 1 = $T_{\text{max}}$, Kênh 2 = $\Delta T$.
-    * Phân tích 64 ô lưới Cell kết hợp với 1 chỉ số bức xạ toàn cảnh (Đánh giá 64+1).
-  * **Giai đoạn 2 (Temporal Aggregator & Risk Classifier - 0.2 Hz)**:
-    * Gom cụm 5 frame liên tiếp ($5\,\text{s}$) để tính toán động học ngọn lửa:
-      * Tốc độ gia nhiệt bậc một: $\frac{dT}{dt}$ ($^\circ\text{C/s}$).
-      * Gia tốc gia nhiệt bậc hai: $\frac{d^2T}{dt^2}$.
-      * Gradient không gian: $|\nabla T|$ và phương sai nhiệt độ toàn cảnh $\sigma^2$.
-    * Đưa ra phân loại 3 mức rủi ro: **SAFE** (An toàn), **SUSPECT** (Nghi ngờ), **FIRE ALARM** (Báo cháy khẩn cấp).
-  * **Mô phỏng & Replay Kịch bản Cháy (`replay_fire.py`, `generate_dataset.py`)**:
-    * Cung cấp công cụ mô phỏng dữ liệu nhiệt độ không cần phần cứng camera thật để phục vụ kiểm thử đơn vị và benchmark trên máy trạm x86 hoặc trực tiếp trên bo mạch.
-
----
-
-## 10. BẢNG TỔNG HỢP ÁNH XẠ CHỨC NĂNG & TẬP TIN MÃ NGUỒN
-
-| Hạng Mục Tính Năng | Tập Tin Mã Nguồn / Tài Liệu | API / Hàm Chức Năng Tiêu Biểu |
-| :--- | :--- | :--- |
-| **Giao thức VOSPI** | `stream_spi.h`, `stream_spi.c`, `hal_spi0_dsi.c` | `spi_stream_init`, `spi_get_frame`, `spi0_dsi_transfer_burst` |
-| **Giao thức I2C / VDCMD** | `data_rw.h`, `data_rw.c`, `vdcmd.h`, `vdcmd.c` | `data_rw_i2c_hw_init`, `short_cmd_write`, `standard_cmd_read`, `long_cmd_read` |
-| **Luồng Video & Màn trập** | `falcon_cmd.h`, `falcon_cmd.c`, `core.c` | `preview_start`, `y16_preview_start`, `ooc_b_update`, `set_prop_auto_shutter_params` |
-| **Chống kẹt màn trập** | `falcon_cmd.h`, `falcon_cmd.c` | `SHUTTER_PROP_PROTECT_SWITCH`, `SHUTTER_PROTECT_THR_HIGH_GAIN` |
-| **Đo nhiệt độ (TPD)** | `falcon_cmd.h`, `falcon_cmd.c` | `tpd_get_max_min_temp_info`, `tpd_get_point_temp_info`, `tpd_get_rect_temp_info` |
-| **Lưới Cell 8x8 & Báo động** | `grid.h`, `grid.c`, `main.c` | `grid_process_2d`, `grid_check_2d`, `thermal_camera_task` |
-| **Bảng màu & Zoom ảnh** | `falcon_cmd.h`, `falcon_cmd.c` | `pseudo_color_set`, `zoom_center_up`, `zoom_position_up` |
-| **Hiệu chuẩn Điểm mù (DPC)** | `falcon_cmd.h`, `Dead pixel correction/` | `dpc_auto_calibration`, `dpc_add_point`, `dpc_remove_point` |
-| **Hiệu chuẩn Nhiễu nắp che** | `falcon_cmd.h`, `Lid pattern noise/` | `rmcover_auto_calc`, `rmcover_sts_switch` |
-| **Hiệu chuẩn Thứ cấp** | `falcon_cmd.h`, `Secondary calibration/` | `tpd_ktbt_recal_1point`, `tpd_ktbt_recal_2point` |
-| **Bù sai số Môi trường** | `temperature.h`, `temperature.c`, `libirtemp.h` | `calculate_org_env_cali_parameter`, `calculate_new_env_cali_parameter` |
-| **Nâng cấp Firmware** | `firmware.h`, `firmware.c` | `update_firmware`, `sys_reset_to_rom`, `spi_erase_sector` |
-| **Liên kết Đa nhân IPC** | `ipc.h`, `ipc.c` | `ipc_init`, `ipc_notify_grid_ready`, `ipc_notify_alarm`, `ipc_process_linux_cmds` |
-| **Mô hình NPU & AI Pipeline** | `test_v1/`, `test_v2/`, `test_v3/` | `integrated_pipeline.py`, `ml1_pipeline.py`, `test_pipeline.py` |
