@@ -1,395 +1,133 @@
-# BÁO CÁO TOÀN DIỆN VÀ HƯỚNG DẪN ĐỌC SOURCE DRIVER SPI (TẦNG 0 – TẦNG 2)
-## Dành cho Phát triển Sản phẩm Thương mại (Product Development) trên SOPHGO SG2002 / FreeRTOS
+# Hướng dẫn đọc source driver SPI tầng 0–2
 
-> **Ngày cập nhật:** 24/10/2026  
-> **Trạng thái:** **BOARD QUALIFIED — ĐÃ NGHIỆM THU THÀNH CÔNG 100% TRÊN PHẦN CỨNG THỰC TẾ**  
-> **Phạm vi kiểm chứng:** SG2002 FreeRTOS (Core 1) $\longleftrightarrow$ STM32F103 Slave (Mode 3, 500 kHz, > 600 packets, 0 bit error, 100% PASS).
+**Đối tượng:** người đọc và phát triển driver SPI0 dùng chung trên SG2002/CV181x FreeRTOS. Tài liệu này mô tả source hiện có, không phải báo cáo nghiệm thu phần cứng. Kiến trúc và lộ trình ở [tài liệu tổng quan](spi_driver_architecture_and_roadmap.md).
 
----
+**Trạng thái:** T0–T2 triển khai polling và đã compile/link ở lần build trước. DMA/IRQ chưa hoạt động; clock PLL và waveform của source hiện tại chưa được đo trên board.
 
-## 1. TỔNG QUAN KIẾN TRÚC PHÂN TẦNG (LAYERS ARCHITECTURE)
+## 1. Đọc theo thứ tự nào
 
-Hệ thống driver SPI trên Core 1 (FreeRTOS RISC-V C906) được thiết kế theo mô hình 3 tầng phân lập chặt chẽ, tuân thủ nguyên tắc *Separation of Concerns* của chuẩn phần mềm công nghiệp:
+| Bước | File | Câu hỏi cần trả lời |
+| --- | --- | --- |
+| 1 | [`dw_spi_regs.h`](../../freertos/cvitek/hal/cv181x/spi/src/dw_spi_regs.h) | Register và bit DW SSI nào được sử dụng? |
+| 2 | [`hal_spi_platform.c`](../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform.c) | Clock, reset, FPC2 và GPIO CS được chuẩn bị ra sao? |
+| 3 | [`hal_dw_spi.h`](../../freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h) | State và API nối T0 với T1/T2 là gì? |
+| 4 | [`hal_dw_spi.c`](../../freertos/cvitek/hal/cv181x/spi/src/hal_dw_spi.c) | Controller phát/thu và dọn lỗi thế nào? |
+| 5 | [`spi.h`](../../freertos/cvitek/driver/spi/include/spi.h) | Caller được phép yêu cầu điều gì? |
+| 6 | [`spi.c`](../../freertos/cvitek/driver/spi/src/spi.c) | T2 bảo vệ bus và ghép các bước HAL thành một giao dịch thế nào? |
+| 7 | Các `CMakeLists.txt` của HAL/driver | Source được build và cài header ra sao? |
 
-```
-+-----------------------------------------------------------------------------------+
-|  TẦNG ỨNG DỤNG / SẢN PHẨM (Product Layer / Sensor Drivers / VoSPI Tiny1C)         |
-|  - Task điều khiển camera Tiny1C, Task kiểm thử STM32 (spi_test_stm32.c)         |
-|  - Vùng nhớ chia sẻ Telemetry DDR (0x8FF20000) giao tiếp Zero-Copy với Linux       |
-+-----------------------------------------------------------------------------------+
-                                        | (Gọi Public API qua spi.h)
-                                        v
-+-----------------------------------------------------------------------------------+
-|  TẦNG 2: CORE DRIVER / BUS & DEVICE MANAGER (driver/spi/src/spi.c)               |
-|  - Quản lý vòng đời Bus (spi_bus_t) và Thiết bị ngoại vi (spi_device_t)           |
-|  - Đồng bộ đa luồng bằng Static Mutex, chống Race Condition                       |
-|  - Ghép chuỗi giao dịch (spi_message_t) gồm nhiều đoạn (spi_segment_t)             |
-|  - Quản lý Deadline/Timeout toàn cục, kiểm soát thời gian trễ CS setup/hold       |
-|  - Quản lý máy trạng thái lỗi: Tách biệt transfer_status và cleanup_status        |
-+-----------------------------------------------------------------------------------+
-                                        | (Gọi HAL API qua hal_dw_spi.h)
-                                        v
-+-----------------------------------------------------------------------------------+
-|  TẦNG 1: CONTROLLER HAL (hal/cv181x/spi/src/hal_dw_spi.c)                         |
-|  - Driver độc lập phần cứng điều khiển ngoại vi Synopsys DesignWare APB SSI        |
-|  - Cấu hình thanh ghi: CTRLR0 (Mode 0-3, DFS 4-16 bit), BAUDR, SSIENR, SER, SR    |
-|  - Thuật toán Polling chống treo: Giữ bất biến FIFO (sent - got <= fifo_depth)    |
-|  - Tự động dò độ sâu phần cứng FIFO (FIFO Depth Probing)                          |
-|  - Finish (chờ TFE/!BUSY), Chụp ảnh trạng thái lỗi (Snapshot) và Abort khẩn cấp   |
-+-----------------------------------------------------------------------------------+
-                                        | (Gọi Platform Hook qua hal_dw_spi.h)
-                                        v
-+-----------------------------------------------------------------------------------+
-|  TẦNG 0: PLATFORM HARDWARE HAL (hal/cv181x/spi/src/hal_spi_platform.c)           |
-|  - Mở khóa khối MIPI DSI D-PHY (0x0A0D1000) sang Digital GPO/GPI (0x00001F1F)    |
-|  - Cấu hình PADCTRL (0x03001C70..0x03001C7C) mức 0x44 (Pull-Up, Drive Strength)   |
-|  - Thiết lập Pinmux FPC2: Pin 15 (SCK), Pin 18 (MOSI), Pin 17 (MISO) -> Func 6   |
-|  - Điều khiển chân Chip Select (CS) qua GPIO XGPIOC17 (FPC2 Pin 14)               |
-|  - Cấp nguồn xung nhịp an toàn: XTAL 25 MHz (CLOCK_BYPASS bit 30)                |
-+-----------------------------------------------------------------------------------+
-                                        | (Tín hiệu điện 1.8V tại cổng FPC2)
-                                        v
-+-----------------------------------------------------------------------------------+
-|  PHẦN CỨNG NGOÀI: TXS0108E (Level Shifter 1.8V <-> 3.3V) <-> STM32F103 / Tiny1C   |
-+-----------------------------------------------------------------------------------+
-```
+Source T1 đặt `snapshot()` và `abort()` ở đầu file, nhưng nên đọc theo thứ tự vận hành: `init → configure → begin → poll → finish → snapshot → abort`. Sau khi hiểu T0–T2, một task ngoại vi bất kỳ có thể làm ví dụ caller; protocol của task không thuộc driver SPI chung.
 
----
+## 2. T0 — platform SG2002 và board
 
-## 2. CHI TIẾT TẦNG 0 — PLATFORM HARDWARE HAL
+**Vai trò:** biến yêu cầu “bus SPI0 với clock và chân ngoài” thành register clock/reset/pad/pinmux/GPIO cụ thể. Không truyền frame SPI và không có mutex FreeRTOS.
 
-### 2.1. File mã nguồn & Vai trò
-- **File thực thi:** `freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform.c`
-- **File định nghĩa thanh ghi:** `freertos/cvitek/hal/cv181x/spi/src/dw_spi_regs.h`
-- **Vai trò:** Cung cấp lớp thích ứng phần cứng cấp thấp nhất (Board Support). Tách biệt hoàn toàn việc cấu hình chân pin, nguồn xung nhịp và đặc thù phần cứng của SoC SOPHGO SG2002 ra khỏi thuật toán của Tầng 1.
+### 2.1. Các nhóm register đã set
 
-### 2.2. Các thao tác phần cứng then chốt
-1. **Quản lý Nguồn Xung (Clock Tree):**
-   - Địa chỉ thanh ghi `CLOCK_BYPASS` (`0x03002038`).
-   - Bit 30: Chuyển nguồn cấp cho `clk_spi` sang thạch anh **XTAL 25 MHz** cố định. Không dùng nguồn PLL biến thiên để đảm bảo độ chính xác tuyệt đối khi tính toán baudrate.
-2. **Giải phóng kẹp Analog của khối MIPI DSI D-PHY (`0x0A0D1000`):**
-   - Trên SG2002, các chân cổng FPC2 đi xuyên qua bộ D-PHY hiển thị màn hình. Mặc định khởi động, Lane 0, 1, 2 bị dìm xuống mức `0V` (Analog LP-00).
-   - Tầng 0 thực thi công thức 8 bước mở khóa D-PHY sang chế độ **Digital GPO/GPI (`0x00001F1F`)**:
-     - `REG_DSI_PHY_EN (0x0A0D1000) = 0x00000000` (Tắt DSI analog)
-     - `REG_DSI_PHY_LANE_SEL (0x0A0D109C) = 0x000FFFFF`
-     - `REG_DSI_PHY_PD (0x0A0D1064) = 0x00001F1F` (Tắt Power-down)
-     - `REG_DSI_PHY_LPTX_OV (0x0A0D104C) = 0x001F001F`
-     - `REG_DSI_PHY_PD_EN_TX (0x0A0D1054) = 0x00001F1F`
-     - `REG_DSI_PHY_PD_TXDRV (0x0A0D1050) = 0x1F1F1F1F`
-     - `REG_DSI_PHY_GPO (0x0A0D10C4) = 0x00001F1F` (Mở cổng xuất Digital)
-     - `REG_DSI_PHY_GPI (0x0A0D10C8) = 0x00001F1F` (Mở cổng nhận Digital)
-3. **Cấu hình Điểm tiếp xúc (PADCTRL) & Chuyển mạch chân (Pinmux):**
-   - 4 thanh ghi `PADCTRL` (`0x03001C70..0x03001C7C`) cho 4 chân SPI được cập nhật mặt nạ `0x6C` về giá trị `0x44` (Bật Pull-up nội, Drive Strength mức 2).
-   - Cấu hình Pinmux sang Func 6 (SPI0):
-     - `PINMUX_MIPI_TXM2 (0x030011A4) = 6` $\rightarrow$ FPC2 Pin 15: **SCK**
-     - `PINMUX_MIPI_TXM1 (0x030011AC) = 6` $\rightarrow$ FPC2 Pin 18: **MOSI / SDO**
-     - `PINMUX_MIPI_TXP1 (0x030011B0) = 6` $\rightarrow$ FPC2 Pin 17: **MISO / SDI**
-4. **Điều khiển Chip Select (CS) qua GPIO:**
-   - Chân `PAD_MIPI_TXP2` (FPC2 Pin 14) được cấu hình sang Func 3: `XGPIOC17`.
-   - Nạp mức cao (`CS_BIT`) vào thanh ghi `GPIOC_DATA` và `GPIOC_DIR` **trước khi** chuyển mux để triệt tiêu hoàn toàn xung nhiễu (glitch) xuống mức 0 lúc khởi động.
+| Nhóm | Source dùng để làm gì |
+| --- | --- |
+| `CLOCK_GATE_APB`, `CLOCK_GATE_SPI` | Cấp clock truy cập APB và clock chạy SPI0 |
+| `CLOCK_BYPASS`, `CLOCK_DIV_SPI` | Chọn XTAL hoặc đường FPLL/divider |
+| `RESET_BANK1` | Deassert soft reset SPI0; source không phát reset pulse mới |
+| `GPIOC_DATA`, `GPIOC_DIR` | Đặt GPIOC17 output, CS active-low |
+| `PINMUX_MIPI_TX*` | Nối FPC2 sang SCK, SDO, SDI và GPIO CS |
+| `PADCTRL_MIPI_BASE`, các register D-PHY | Đặt pad và đường digital qua D-PHY cho FPC2 |
 
-### 2.3. Các hàm API Tầng 0
-```c
-int hal_spi_platform_prepare(hal_spi_t *hw, bool force_xtal, bool external_pins);
-// Chuẩn bị nguồn xung nhịp 25MHz, gán địa chỉ base 0x04180000, kiểm tra tính hợp lệ.
+Địa chỉ và mask cụ thể nằm ở đầu `hal_spi_platform.c`. [`top_reg.h`](../../freertos/cvitek/hal/cv181x/config/top_reg.h) có thêm tên SPI/clock dùng chung và [`hal_pinmux.c`](../../freertos/cvitek/hal/cv181x/pinmux/src/hal_pinmux.c) có case `PINMUX_SPI0`. **Đường chạy T0 hiện tại dùng MMIO trực tiếp**, không gọi helper `hal_pinmux_config()`; hai file này không thay thế recipe trong `hal_spi_platform.c`.
 
-int hal_spi_platform_connect(hal_spi_t *hw);
-// Thực thi recipe mở khóa D-PHY, PADCTRL, Pinmux Func 6 và gán GPIO CS mức cao.
+### 2.2. Hàm và thứ tự thực thi
 
-int hal_spi_platform_cs(hal_spi_t *hw, bool active);
-// Điều khiển kéo chân CS: active=true (kéo xuống 0V), active=false (kéo lên 1.8V). Có readback kiểm tra.
+1. `hal_spi_platform_prepare(hw, force_xtal, external_pins)` zero `hal_spi_t`, chọn clock, bật gate, deassert reset và readback. Chỉ sau readback thành công mới gán `base=0x04180000` và `clock_hz`. `force_xtal=1` khai báo 25 MHz; `force_xtal=0` đặt divider FPLL/8 và khai báo 187.5 MHz. Giá trị PLL là giả định source, cần đo trên board.
+2. `hal_spi_time_us()` đổi system time sang microsecond cho deadline T1/T2.
+3. Sau khi T1 init controller, `hal_spi_platform_connect(hw)` gọi `prepare_fpc2()` nếu `external_pins=1`. Hàm nạp CS cao trước khi chuyển mux GPIO, cấu hình tám register D-PHY, bốn pad, rồi mux SCK/SDO/SDI. Nó readback GPIO/mux/pad trước khi báo thành công.
+4. `hal_spi_platform_cs(hw, active)` kéo GPIOC17 thấp khi `active=true`, cao khi false, rồi readback output. Khi không dùng chân ngoài, hook trả OK mà không đổi pad.
 
-uint64_t hal_spi_time_us(void);
-// Lấy thời gian hệ thống tính theo microsecond phục vụ tính toán timeout/deadline.
-```
+`update()` là read-modify-write từng register để giữ các bit khác. Nó không phải khóa liên lõi. Ứng dụng phải bảo đảm Linux, display, GPIO khác và code trực tiếp MMIO không cùng sở hữu các tài nguyên này.
 
-### 2.4. Khả năng tái sử dụng cho Product (Sản phẩm thương mại)
-- **Tận dụng 100%:** Công thức mở khóa D-PHY và PADCTRL này là duy nhất và bắt buộc cho mọi sensor kết nối qua cổng FPC2 trên SG2002.
-- **Ràng buộc phần cứng:** Không thể sử dụng đồng thời cổng FPC2 cho màn hình hiển thị MIPI DSI nếu đã dùng cho SPI0. Mức logic tại cổng FPC2 là **1.8V chuẩn**, rất an toàn và tương thích trực tiếp với các dòng camera nhiệt hiện đại (như Tiny1C).
+### 2.3. Tại sao T0 tách khỏi T1
 
----
+Clock/pad/pinmux là đặc thù board/SoC; cách vận hành FIFO và CTRLR0 thuộc IP DW SSI. Nếu chuyển sang board khác nhưng vẫn dùng DW SSI, có thể giữ phần lớn T1/T2 và thay T0. Nếu board dùng chân CS khác, chỉ T0 và cấu hình capability cần đổi; protocol slave không phải biết địa chỉ GPIO.
 
-## 3. CHI TIẾT TẦNG 1 — CONTROLLER HAL
+## 3. T1 — DesignWare SSI controller HAL
 
-### 3.1. File mã nguồn & Vai trò
-- **File thực thi:** `freertos/cvitek/hal/cv181x/spi/src/hal_dw_spi.c`
-- **File header:** `freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h`
-- **Vai trò:** Cung cấp trình điều khiển trực tiếp phần cứng ngoại vi **Synopsys DesignWare APB SSI (DW_SPI)**. Hoàn toàn độc lập với FreeRTOS (không include FreeRTOS.h), thuần C11, có thể chạy trên bare-metal hoặc unit test trên host model.
+**Vai trò:** điều khiển register SPI, không biết task, slave hay nội dung dữ liệu. [`hal_dw_spi.h`](../../freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h) định nghĩa `hal_spi_t` (base, clock, FIFO depth, bit width, trạng thái) và các mã lỗi nội bộ.
 
-### 3.2. Thuật toán điều khiển cốt lõi
-1. **Tự động dò độ sâu phần cứng FIFO (FIFO Depth Probing):**
-   - Hàm `hal_spi_init()` tự động ghi tăng dần vào `DW_SPI_TXFTLR` và đọc lại để xác định chính xác dung lượng FIFO của chip (trên SG2002 là 8 phần tử) mà không cần hardcode trong mã nguồn.
-2. **Tính toán Baudrate chính xác không vượt trần:**
-   - Khảo sát thanh ghi chia tần `DW_SPI_BAUDR`: Nhận số chẵn $2 \le \text{BAUDR} \le 65534$.
-   - Công thức: $\text{BAUDR} = 2 \times \lceil \frac{\text{Clock}}{2 \times \text{max\_hz}} \rceil$. Bảo đảm tần số thực tế `actual_hz` luôn $\le$ tần số yêu cầu của sensor.
-3. **Cấu hình chế độ truyền (`DW_SPI_CTRLR0`):**
-   - Hỗ trợ đầy đủ Mode 0, 1, 2, 3 qua 2 bit `SCPOL` (bit 7) và `SCPH` (bit 6).
-   - Hỗ trợ kích thước frame từ 4 đến 16-bit (`DFS` bit 3..0).
-   - Thiết lập Full Duplex (`TMOD = 0`). Chế độ loopback nội (`SRL` bit 11) chỉ kích hoạt khi có yêu cầu chẩn đoán.
-4. **Vòng lặp Polling chống treo / chống tràn (Invariant Polling Loop):**
-   - Luôn duy trì bất biến: `(sent - got) <= fifo_depth`.
-   - Chỉ đẩy thêm byte vào TX FIFO khi bộ đệm chưa đầy và số lượng đang chờ nhận chưa vượt quá độ sâu FIFO. Ngăn chặn tuyệt đối lỗi tràn RX FIFO (`RXOI` / Overflow Error).
-5. **Cơ chế Finish, Snapshot và Abort an toàn:**
-   - `hal_spi_finish()`: Chờ cờ `TFE` (TX FIFO Rỗng) và `!BUSY` (Đường truyền vật lý hoàn tất).
-   - `hal_spi_snapshot()`: Chụp lại thanh ghi trạng thái `DW_SPI_SR` và cờ ngắt thô `DW_SPI_RISR` để chuyển lên Tầng 2 phân tích trước khi tiến hành reset phần cứng.
-   - `hal_spi_abort()`: Luôn chạy ở cuối mọi phiên (dù thành công hay lỗi) để giải phóng CS và tắt `SSIENR = 0`.
+### 3.1. Từng bước trong vòng đời
 
-### 3.3. Các hàm API Tầng 1
-```c
-int hal_spi_init(hal_spi_t *hw);
-// Khởi tạo controller, tắt SSIENR, tự dò FIFO depth, xác minh trạng thái an toàn.
+| Hàm | Việc thực hiện | Điều kiện quan trọng |
+| --- | --- | --- |
+| `hal_spi_init` | Tắt IMR/DMACR/SSI/SER; probe TX FIFO depth; đặt mặc định | T0 đã cấp clock/base; chân ngoài chưa nối trong luồng T2 |
+| `hal_spi_configure` | Kiểm tra mode 0–3, bits 4–16; tính BAUDR; ghi CTRLR0/BAUDR và readback | Controller idle, clock/base/fifo hợp lệ; `max_hz>0` |
+| `hal_spi_begin` | Bật SSI/SER rồi gọi T0 assert CS | Đã configure; chưa active |
+| `hal_spi_poll` | Truyền và nhận full-duplex từng frame; kiểm deadline/RISR | Đã active; số frame > 0 |
+| `hal_spi_finish` | Chờ TFE và `!BUSY`, không xóa cờ lỗi | Chưa nhả CS |
+| `hal_spi_snapshot` | Đọc SR và RISR trước cleanup | T2 giữ kết quả để chẩn đoán |
+| `hal_spi_abort` | Tắt request/SSI/SER, nhả CS qua T0, kiểm readback | Gọi cả thành công lẫn lỗi |
 
-int hal_spi_configure(hal_spi_t *hw, uint32_t max_hz, unsigned int mode,
-                      unsigned int bits, bool loopback, uint32_t *actual_hz);
-// Cấu hình thanh ghi CTRLR0, tính toán BAUDR chẵn, trả về tần số SCK thực tế.
+BAUDR là số chẵn tối thiểu 2. T1 làm tròn lên để SCK tính toán không vượt `max_hz`, đồng thời áp trần `SPI_MAX_HZ=46,875,000` trong `dw_spi_regs.h`. `actual_hz` dựa trên `hw->clock_hz`; nó không phản ánh sai lệch clock nguồn hay tín hiệu ngoài pad.
 
-int hal_spi_begin(hal_spi_t *hw);
-// Kích hoạt SSIENR, chọn SER nội bộ, hạ CS vật lý qua Tầng 0.
+### 3.2. Vì sao polling vừa ghi TX vừa đọc RX
 
-int hal_spi_poll(hal_spi_t *hw, const void *tx, void *rx, size_t frames,
-                 uint16_t fill, uint64_t deadline_us, size_t *received);
-// Vòng lặp truyền nhận full duplex có kiểm soát deadline, trả về số frame thực nhận.
+DW SSI ở TMOD full-duplex: mỗi frame TX tạo một frame RX. Kể cả caller không cần dữ liệu nhận, T1 phải đọc DR để tránh RX FIFO đầy. T1 theo dõi `sent` và `got`, chỉ xếp thêm TX khi `sent-got < fifo_depth` và TX FIFO còn chỗ. Một task bị preempt có thể tạo khoảng trống SCK; driver không hứa clock liên tục. `received` tăng sau khi đọc RX, kể cả khi `rx==NULL`.
 
-int hal_spi_finish(hal_spi_t *hw, uint64_t deadline_us);
-// Chờ phần cứng phát xong bit cuối cùng và trả bus về trạng thái rỗi.
+Nếu `tx==NULL`, HAL ghi `fill_word` để tạo clock. Nếu `rx==NULL`, dữ liệu nhận bị bỏ sau khi drain. Bit cao ngoài độ rộng frame bị mask. Với 4–8 bit, buffer dùng phần tử `uint8_t`; 9–16 bit dùng `uint16_t`.
 
-void hal_spi_snapshot(hal_spi_t *hw, hal_spi_snapshot_t *snapshot);
-// Chụp cờ trạng thái SR và RISR.
+### 3.3. Lỗi và giới hạn T1
 
-int hal_spi_abort(hal_spi_t *hw);
-// Nhả CS, ngắt SSIENR, đưa bus về trạng thái đóng.
-```
+T1 kiểm `RISR` cho lỗi controller và deadline trong vòng polling/finish. `finish()` chỉ xác nhận dữ liệu đã ra dây, còn `abort()` luôn thực hiện cleanup. Việc ghi `DMACR=0` hiện chỉ tắt request DMA của SPI; **nó chưa dừng một channel DMAC**, nên không thể dùng code này như backend DMA. Mode TX-only/RX-only chuyên biệt, IRQ và DMA chưa được cài đặt.
 
-### 3.4. Khả năng tái sử dụng cho Product
-- **Tận dụng 100%:** Dùng cho toàn bộ việc khởi tạo, gửi lệnh điều khiển (Control Command), cài đặt tham số, đọc thanh ghi trạng thái của camera Tiny1C hoặc các chip ngoại vi SPI khác.
-- **Đánh giá hiệu năng Polling vs DMA:**
-  - Với các gói tin điều khiển, cấu hình sensor (< 4 KB): Polling phản hồi tức thì với độ trễ microsecond cực thấp, không tốn chi phí quản lý kênh DMA.
-  - Với luồng dữ liệu video liên tục (25 fps VoSPI): Polling sẽ chiếm CPU trong lúc truyền. Do đó Tầng 1 đã được chuẩn bị sẵn kiến trúc để mở rộng backend sang DMA (Tầng 3/Milestone tiếp theo).
+## 4. T2 — bus/device API FreeRTOS
 
----
+**Vai trò:** public API trong `spi.h`, một bus SPI0, pool tĩnh bốn device và một mutex. T2 không ghi register SoC trực tiếp.
 
-## 4. CHI TIẾT TẦNG 2 — CORE DRIVER / BUS & DEVICE MANAGER
+### 4.1. Các kiểu dữ liệu public
 
-### 4.1. File mã nguồn & Vai trò
-- **File thực thi:** `freertos/cvitek/driver/spi/src/spi.c`
-- **File header công khai:** `freertos/cvitek/driver/spi/include/spi.h`
-- **Vai trò:** Cung cấp giao diện lập trình **Public API duy nhất** cho toàn bộ các Task trong FreeRTOS. Quản lý tài nguyên, bộ nhớ, đồng bộ đa luồng và bảo vệ phần cứng.
+- `spi_bus_config_t`: chọn XTAL/PLL và có nối chân FPC2 hay chỉ loopback nội.
+- `spi_device_config_t`: `max_hz`, mode, bit order, bits/frame, CS, loopback, CS setup/hold. Source hiện chấp nhận CS index 0, MSB-first.
+- `spi_segment_t`: TX/RX/fill và số **frame SPI**, không phải số byte của một packet giao thức. Một message có 1–32 segment.
+- `spi_message_t`: mảng segment, timeout chung và backend. Hiện chỉ `SPI_BACKEND_POLL` được nhận.
+- `spi_result_t`: SCK tính toán, số segment/frame nhận được, snapshot SR/RISR, `transfer_status` và `cleanup_status`.
 
-### 4.2. Cấu trúc dữ liệu chuẩn cho Sản phẩm
+### 4.2. `spi_bus_init()` và `spi_device_bind()`
 
-#### a) Cấu hình Bus (`spi_bus_config_t`)
-```c
-typedef struct {
-    uint8_t force_xtal;      // 1: Ép dùng nguồn XTAL 25MHz an toàn; 0: Giữ nguyên
-    uint8_t external_pins;   // 1: Mở FPC2 và dùng GPIO CS; 0: Dành cho loopback nội
-} spi_bus_config_t;
-```
+`spi_bus_init(0, cfg)` tạo mutex tĩnh, gọi T0 `prepare`, T1 `init`, T0 `connect`, rồi mới công bố `ready=true`. Init lần nữa khi bus ready trả BUSY. Lỗi giữa init không rollback toàn bộ shared register. `spi_device_bind()` kiểm tra capability, sao chép config vào một slot tĩnh; bind/unbind phải được caller tuần tự hóa, không unbind trong khi transfer còn dùng handle.
 
-#### b) Cấu hình Thiết bị ngoại vi (`spi_device_config_t`)
-```c
-typedef struct {
-    uint32_t max_hz;            // Tần số tối đa (ví dụ 500000, 1000000)
-    spi_mode_t mode;            // SPI_MODE_0..3 (Tiny1C dùng SPI_MODE_3)
-    spi_bit_order_t bit_order;  // SPI_MSB_FIRST
-    uint8_t bits_per_frame;     // 8-bit (hoặc 4..16)
-    uint8_t cs_index;           // 0: Chân CS mặc định (XGPIOC17)
-    uint8_t internal_loopback;  // 0: Truyền dây thật; 1: Loopback nội chẩn đoán
-    uint16_t cs_setup_us;       // Thời gian giữ CS thấp trước khi phát clock (ví dụ 10us)
-    uint16_t cs_hold_us;        // Thời gian giữ CS thấp sau khi clock xong (ví dụ 2us)
-} spi_device_config_t;
-```
+### 4.3. `spi_transfer()` theo thứ tự thực tế
 
-#### c) Cấu trúc Thông điệp truyền nhận (`spi_message_t` & `spi_segment_t`)
-Cho phép gom nhiều đoạn truyền liên tiếp trong **cùng một phiên giữ chân CS thấp**:
-```c
-typedef struct {
-    const void *tx;       // Buffer phát (nếu NULL: tự động phát fill_word làm clock)
-    void *rx;             // Buffer nhận (nếu NULL: tự động bỏ qua dữ liệu nhận)
-    size_t frames;        // Số frame cần truyền trong đoạn này
-    uint16_t fill_word;   // Giá trị đệm phát ra khi tx == NULL (thường là 0xFF hoặc 0x00)
-} spi_segment_t;
+1. Zero `result`, lấy thời điểm bắt đầu. Kiểm handle, message, timeout, segment count, frame count, căn chỉnh buffer, tràn số học và mọi cặp TX/RX chồng lấn; backend không hỗ trợ bị từ chối trước khi phát xung.
+2. Tính một deadline tuyệt đối cho cả lời gọi, gồm validation và chờ mutex. Chờ mutex theo tick hữu hạn; sau khi lấy khóa, kiểm lại `ready` và deadline.
+3. Gọi T1 `configure` theo device, rồi `begin` để assert CS một lần. Chờ `cs_setup_us` nếu có.
+4. Gọi `hal_spi_poll()` lần lượt cho từng segment, không nhả CS giữa các đoạn. Cộng `frames_received`, tăng `segments_completed` chỉ khi đoạn hoàn tất.
+5. Gọi `finish` để chờ bit cuối ra dây. Nếu thành công, chờ `cs_hold_us`. Luôn snapshot SR/RISR rồi `abort`; lưu cả lỗi truyền và lỗi cleanup.
+6. Nếu cleanup lỗi, đặt bus NOT_READY, trả IO. Nhả mutex trên mọi đường đã lấy khóa.
 
-typedef struct {
-    const spi_segment_t *segments;  // Mảng các đoạn truyền (tối đa 32 segments)
-    size_t segment_count;           // Số lượng đoạn
-    uint32_t timeout_ms;            // Ngân sách thời gian toàn cục cho cả phiên (ms)
-    spi_backend_t backend;          // SPI_BACKEND_POLL (hoặc SPI_BACKEND_DMA sau này)
-} spi_message_t;
-```
+Sơ đồ trình tự có trong [tài liệu kiến trúc](spi_driver_architecture_and_roadmap.md#5-luồng-truyền-kết-thúc-và-lỗi).
 
-#### d) Kết quả bàn giao chi tiết (`spi_result_t`)
-```c
-typedef struct {
-    uint32_t actual_hz;            // Tần số SCK thực tế bộ chia tạo ra
-    size_t segments_completed;     // Số đoạn đã hoàn tất trọn vẹn
-    size_t frames_received;        // Tổng số frame thực tế đã đọc về
-    uint32_t controller_status;    // Thanh ghi DW_SPI_SR tại thời điểm kết thúc
-    uint32_t controller_raw_irq;   // Thanh ghi ngắt DW_SPI_RISR
-    spi_status_t transfer_status;  // Lỗi truyền dữ liệu gốc (Timeout, I/O, Argument...)
-    spi_status_t cleanup_status;   // Trạng thái thu hồi phần cứng và nhả CS
-} spi_result_t;
-```
+### 4.4. Ý nghĩa các lỗi public
 
-### 4.3. Các hàm Public API Tầng 2
-```c
-spi_status_t spi_bus_init(unsigned int bus_id, const spi_bus_config_t *config);
-// Khởi tạo bus 0, kết nối phần cứng Tầng 0 và chuẩn bị Tầng 1.
+| Mã | Ý nghĩa thực tế |
+| --- | --- |
+| `SPI_ERR_ARGUMENT` | Handle, cấu hình, buffer hoặc message không hợp lệ |
+| `SPI_ERR_UNSUPPORTED` | Bus/CS/bit order/backend hoặc tốc độ ngoài khả năng source |
+| `SPI_ERR_NOT_READY` | Bus chưa init hoặc đã bị khóa sau cleanup lỗi |
+| `SPI_ERR_TIMEOUT` | Hết deadline khi chờ mutex, truyền hoặc chờ idle |
+| `SPI_ERR_IO` | Controller, pin/CS hoặc cleanup báo lỗi |
+| `SPI_ERR_BUSY` | Bus đã init hoặc pool device hết slot |
 
-spi_bus_t *spi_bus_get(unsigned int bus_id);
-// Lấy con trỏ bus đã khởi tạo thành công.
+Khi return lỗi, `frames_received` chỉ cho biết số frame đã drain, không khẳng định slave đã xử lý bao nhiêu dữ liệu. T2 không tự retry vì lặp một message có thể tạo tác dụng phụ ở thiết bị.
 
-spi_status_t spi_device_bind(spi_bus_t *bus, const spi_device_config_t *config,
-                             spi_device_t **device);
-// Gán cấu hình thiết bị (Mode, Hz, Setup/Hold timing), trả về handle spi_device_t.
+## 5. Các file được thêm và sửa để ghép build
 
-spi_status_t spi_device_unbind(spi_device_t *device);
-// Hủy đăng ký thiết bị khỏi bus, giải phóng slot pool tĩnh.
+| File | Vai trò |
+| --- | --- |
+| [`hal/cv181x/spi/CMakeLists.txt`](../../freertos/cvitek/hal/cv181x/spi/CMakeLists.txt) | Build T0/T1 thành object `halspi`, install HAL header |
+| [`hal/cv181x/CMakeLists.txt`](../../freertos/cvitek/hal/cv181x/CMakeLists.txt) | Đưa thư mục `spi` vào danh sách HAL |
+| [`driver/spi/CMakeLists.txt`](../../freertos/cvitek/driver/spi/CMakeLists.txt) | Build T2 thành object `spi`, install public header |
+| [`driver/CMakeLists.txt`](../../freertos/cvitek/driver/CMakeLists.txt) | Chọn driver SPI khi build CV181x |
+| [`top_reg.h`](../../freertos/cvitek/hal/cv181x/config/top_reg.h), [`hal_pinmux.c`](../../freertos/cvitek/hal/cv181x/pinmux/src/hal_pinmux.c) | Định nghĩa SoC và helper pinmux SPI0; T0 hiện dùng register trực tiếp |
 
-spi_status_t spi_transfer(spi_device_t *device, const spi_message_t *message,
-                          spi_result_t *result);
-// Thực thi giao dịch SPI trọn gói có bảo vệ Mutex, kiểm soát timeout và cleanup an toàn.
-```
+Các file task kiểm thử, linker telemetry và tài liệu slave cụ thể ở ngoài T0–T2. Chúng là caller hoặc công cụ quan sát, không phải điều kiện để API SPI chung tồn tại.
 
-### 4.4. Các cơ chế bảo vệ công nghiệp trong Tầng 2
-1. **Quản lý Mutex tĩnh (Static FreeRTOS Mutex):** Không dùng `malloc` động trong FreeRTOS để tránh hiện tượng phân mảnh bộ nhớ (Heap Fragmentation) khi chạy lâu ngày.
-2. **Kiểm tra ranh giới và chống chồng lấn buffer (Validation Overlap):** Ngăn chặn người dùng vô tình truyền địa chỉ buffer TX và RX chồng lấn lên nhau gây hỏng dữ liệu.
-3. **Cơ chế Fail-Safe cho Bus (`NOT_READY`):** Nếu một giao dịch gặp sự cố phần cứng nghiêm trọng và không thể nhả CS hoặc không thể dừng controller (`cleanup_status != SPI_OK`), Tầng 2 sẽ tự động đánh dấu bus là `NOT_READY`, từ chối mọi giao dịch tiếp theo để bảo vệ chân tín hiệu vật lý của sensor.
+## 6. Ranh giới trước khi phát triển tiếp
 
----
-
-## 5. CƠ CHẾ GIAO TIẾP LIÊN NHÂN (IPC / SHARED DDR RAM) CHO PRODUCT
-
-Trong một sản phẩm hoàn chỉnh, FreeRTOS (Core 1) thu thập dữ liệu thời gian thực và đẩy sang Linux (Core 0) xử lý. **Shared DDR RAM** là giải pháp chuẩn công nghiệp duy nhất đáp ứng được yêu cầu này.
-
-### 5.1. Thiết kế vùng nhớ Telemetry ABI v1 (`0x8FF20000`)
-Mã nguồn tại `spi_test_stm32.c` đã triển khai cấu trúc bộ nhớ chuẩn hóa 192 bytes tại địa chỉ cố định `0x8FF20000`:
-
-```c
-struct telemetry {
-    uint32_t magic;      // 0x53544D33 ("STM3")
-    uint32_t version;    // 1 (ABI v1)
-    uint32_t seq;        // Seqlock: tăng trước và sau khi ghi dữ liệu
-    uint32_t state;      // 1=WAITING, 2=RUNNING, 3=STOPPED, 4=FATAL
-    uint32_t cycle;      // Tổng số chu kỳ truyền nhận đã chạy
-    uint32_t pass;       // Số lần truyền nhận thành công 100%
-    uint32_t fail;       // Số lần thất bại hoặc mismatch
-    uint32_t errors;     // Số byte sai lệch trong frame gần nhất
-    int32_t  status;     // Mã lỗi spi_status_t (0: SPI_OK)
-    int32_t  cleanup;    // Mã lỗi dọn dẹp phần cứng
-    uint32_t hz;         // Tần số SCK thực tế
-    uint32_t frames;     // Số frame nhận được
-    uint32_t first_bad;  // Vị trí byte đầu tiên bị sai
-    uint32_t expected;   // Giá trị kỳ vọng tại vị trí sai
-    uint32_t actual;     // Giá trị thực tế nhận được
-    uint32_t length;     // Chiều dài frame truyền
-    uint8_t  rx[16];     // Mẫu 16 byte đầu nhận được
-    uint8_t  padding[48];// Đệm tròn 128 bytes (2 Cache lines)
-    
-    // Cache line thứ 3 (Offset 128 / 0x80): Dành riêng cho Linux ghi lệnh
-    uint32_t command;    // 1: START, 0: STOP
-    uint32_t reserved[15];
-};
-```
-
-### 5.2. Tại sao kiến trúc này đạt chuẩn Product?
-1. **Triệt tiêu False Sharing Cache:** Tách lệnh điều khiển `command` sang một cache line 64-byte riêng biệt ở offset 128. Việc Linux ghi `command` không bao giờ làm mất hiệu lực (invalidate) vùng báo cáo của FreeRTOS.
-2. **Cơ chế Seqlock chống đọc dữ liệu rác (Torn Read):** Phía Linux đọc `seq` trước và sau khi copy dữ liệu. Nếu `seq` lẻ (FreeRTOS đang ghi) hoặc `seq_before != seq_after`, Linux biết dữ liệu chưa trọn vẹn và tự động đọc lại.
-3. **Minh bạch bộ đệm Cache:** FreeRTOS luôn gọi `flush_dcache_range` và `inv_dcache_range` đúng vị trí để dữ liệu được xả thẳng xuống chip nhớ vật lý DDR RAM.
-
----
-
-## 6. HƯỚNG DẪN ĐỌC HIỂU SOURCE CODE VÀ GỌI API CHO PRODUCT
-
-Khi bạn viết mã nguồn cho sensor mới (như camera Tiny1C), đây là luồng mẫu chuẩn để ứng dụng gọi xuống driver:
-
-```c
-#include "spi.h"
-
-void tiny1c_task(void *pvParameters)
-{
-    // BƯỚC 1: Khởi tạo Bus 0 qua Tầng 2
-    spi_bus_config_t bus_cfg = {
-        .force_xtal = 1,       // Ép xung XTAL 25 MHz an toàn
-        .external_pins = 1     // Mở cổng FPC2 và kết nối GPIO CS
-    };
-    if (spi_bus_init(0, &bus_cfg) != SPI_OK) {
-        // Xử lý lỗi khởi tạo phần cứng
-        vTaskDelete(NULL);
-        return;
-    }
-    spi_bus_t *bus = spi_bus_get(0);
-
-    // BƯỚC 2: Đăng ký Thiết bị Tiny1C (Mode 3, 500 kHz, CS delay 10us/2us)
-    spi_device_config_t dev_cfg = {
-        .max_hz = 500000,          // 500 kHz (hoặc 1000000 cho 1 MHz)
-        .mode = SPI_MODE_3,        // Mode 3 theo quy chuẩn VoSPI Tiny1C
-        .bit_order = SPI_MSB_FIRST,
-        .bits_per_frame = 8,
-        .cs_index = 0,
-        .internal_loopback = 0,
-        .cs_setup_us = 10,         // Chờ 10us sau khi kéo CS thấp
-        .cs_hold_us = 2            // Chờ 2us trước khi nhả CS cao
-    };
-    spi_device_t *tiny1c_dev = NULL;
-    if (spi_device_bind(bus, &dev_cfg, &tiny1c_dev) != SPI_OK) {
-        // Xử lý lỗi bind thiết bị
-        vTaskDelete(NULL);
-        return;
-    }
-
-    // BƯỚC 3: Thực thi truyền nhận dữ liệu
-    uint8_t tx_dummy[256];
-    uint8_t rx_packet[256];
-    memset(tx_dummy, 0xFF, sizeof(tx_dummy)); // Dummy clock pump
-
-    spi_segment_t seg = {
-        .tx = tx_dummy,
-        .rx = rx_packet,
-        .frames = sizeof(rx_packet)
-    };
-    spi_message_t msg = {
-        .segments = &seg,
-        .segment_count = 1,
-        .timeout_ms = 100,         // Timeout 100ms
-        .backend = SPI_BACKEND_POLL
-    };
-    spi_result_t result;
-
-    while (1) {
-        // Thực thi giao dịch
-        spi_status_t status = spi_transfer(tiny1c_dev, &msg, &result);
-        
-        if (status == SPI_OK) {
-            // Nhận gói VoSPI thành công -> Đẩy vào Shared DDR RAM cho Linux
-        } else {
-            // Lỗi giao dịch -> Kiểm tra result.transfer_status và result.cleanup_status
-        }
-        vTaskDelay(pdMS_TO_TICKS(40)); // Lặp lại theo tần số khung hình (25 fps)
-    }
-}
-```
-
----
-
-## 7. BẢNG MÃ LỖI VÀ Ý NGHĨA KỸ THUẬT (`spi_status_t`)
-
-| Mã lỗi | Giá trị | Ý nghĩa và cách xử lý trong Product |
-|---|:---:|---|
-| `SPI_OK` | `0` | Giao dịch thành công hoàn hảo, CS đã nhả về mức cao an toàn. |
-| `SPI_ERR_ARGUMENT` | `-1` | Con trỏ NULL, buffer overlap, độ dài = 0, hoặc cấu hình không hợp lệ. |
-| `SPI_ERR_UNSUPPORTED` | `-2` | Chế độ chưa hỗ trợ (ví dụ LSB-first, hoặc backend DMA chưa cài đặt). |
-| `SPI_ERR_NOT_READY` | `-3` | Bus đang ở trạng thái khóa an toàn do lỗi phần cứng trước đó chưa khắc phục. |
-| `SPI_ERR_TIMEOUT` | `-4` | Hết ngân sách thời gian `timeout_ms` trước khi phần cứng truyền xong. |
-| `SPI_ERR_IO` | `-5` | Lỗi phần cứng nghiêm trọng: Không kéo được CS, controller báo lỗi tràn RX, hoặc không thể shutdown phần cứng. |
-| `SPI_ERR_BUSY` | `-6` | Bus đang được chiếm bởi một luồng khác và mutex bị timeout. |
-
----
-
-## 8. KẾT LUẬN VÀ BÀN GIAO CHO GIAI ĐOẠN TIẾP THEO
-
-Ngăn xếp driver từ **Tầng 0 đến Tầng 2** đã chính thức hoàn thành, đạt độ ổn định công nghiệp tuyệt đối:
-1. Đã giải phóng hoàn toàn các vướng mắc phần cứng SoC SG2002 (D-PHY, PADCTRL, Pinmux).
-2. Đã xác thực thực tế trên dây nối vật lý với STM32F103 Slave: **Tỷ lệ gói tin hợp lệ đạt 100% qua hàng trăm chu kỳ**.
-3. Cơ chế Telemetry và truyền thông liên nhân Zero-Copy qua **DDR `0x8FF20000`** đã hoạt động trơn tru.
-
-**Giai đoạn tiếp theo: Tích hợp Tầng 3 (Giao thức VoSPI đọc dữ liệu ảnh nhiệt và I2C cấu hình cho module camera Tiny1C)**.
+Baseline phần mềm hiện dùng được để đọc và phát triển tầng trên qua `spi.h`, với các giới hạn polling, một bus và một CS. Để dùng như nền cho tải dữ liệu lớn cần hoàn thiện backend DMA và xác minh ownership DMAC/cache. Để gọi là nghiệm thu phần cứng cần đo clock, waveform, dữ liệu và phục hồi lỗi trên board mục tiêu. Không suy ra kết quả đo từ `actual_hz` hay từ việc compile/link thành công.
