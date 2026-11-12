@@ -510,7 +510,7 @@ Danh sách dưới đây là kết quả đọc mã, chưa phải bản vá hay 
 | Chuyển nhiệt → ảnh chưa khôi phục nguồn rõ ràng | `core_start(MODE_IMAGE)` không gọi `y16_preview_stop()` | Xây dựng chuỗi chuyển mode có stop/khôi phục nguồn, kiểm tra mã trả về |
 | Chưa phân tích header hợp lệ/chỉ số frame | Nhận rồi bỏ thông tin trong khối đầu | Thêm kiểm tra khung theo timing và bố cục đã xác minh |
 | Timeout polling lệnh chỉ 1 giây | `wWaitTime = 1000` trong `data_rw.c` | Dùng timeout phù hợp cho hiệu chuẩn dài |
-| Tài liệu gọi DMA nhưng driver đang polling | `spi0_dsi_transfer_burst()` tự đọc/ghi FIFO trong vòng lặp | Đánh giá tải CPU thực tế; triển khai DMA nếu cần |
+| Driver camera cũ gọi DMA nhưng driver hiện tại đang polling | `spi0_dsi_transfer_burst()` tự đọc/ghi FIFO trong vòng lặp | Đã chốt dùng DMA cho burst ảnh/nhiệt độ để giảm tải CPU; vẫn cần triển khai, xác minh request/remap, cache, CS/timing và đo trên board. DMA không tự tăng SCK; muốn tăng băng thông cần xác minh clock source/divider riêng |
 | Khởi tạo lỗi vẫn tiếp tục | `main.c` in lỗi I2C/SPI/start rồi vẫn vào vòng thu | Thêm trạng thái lỗi, retry và chỉ xử lý khi camera sẵn sàng |
 | Shared buffer có thể đang được ghi khi Linux đọc | Dùng một buffer và không có giao thức snapshot/ownership đầy đủ | Double buffer hoặc cơ chế sequence/đồng bộ phù hợp; dành vùng RAM trong cấu hình hệ thống |
 | FFC 1.500 frame không phải timer 60 giây cố định | Đếm frame nhận thành công | Dùng thời gian thực đo được nếu yêu cầu theo giây |

@@ -1,266 +1,189 @@
-# Kiến trúc thiết kế và cách sử dụng tầng 0 SPI
+# Tài liệu Kiến trúc Chốt Tầng 0 (Platform SoC Layer) — SPI0 trên SOPHGO SG2002 (CV181x)
 
-Tài liệu này giải thích T0 từ source hiện có trên SG2002/CV181x: vì sao các khối được tạo ra, chúng lưu trạng thái gì, được gọi khi nào và phối hợp với T1/T2 ra sao. T0 hiện có phần triển khai IRQ và DMA; ví dụ API bên dưới dùng giao diện source hiện tại.
+Cập nhật chốt: **30-10-2026**
+Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V C906L chạy FreeRTOS, SPI0 qua cổng FPC2)**.
 
-Các hằng phần cứng trong source còn một số sai lệch đã đối chiếu với SDK. Trong tài liệu, “code hiện thực hiện” mô tả luồng chương trình, không mặc nhiên xác nhận mapping điện đúng. Bảng kiểm tra chi tiết được lưu riêng ở [đánh giá source T0](spi_t0_source_review.md).
+---
 
-## 1. T0 giải quyết việc gì?
+## 1. Tổng quan Vai trò và Phạm vi của Tầng 0 (T0)
 
-Để SPI0 trao đổi dữ liệu, việc ghi register FIFO của SPI chưa đủ. SoC phải cấp clock, nhả reset, nối tín hiệu tới pad ngoài, điều khiển CS và chuyển ngắt tới CPU. Khi dùng DMA, còn cần nối request SPI với DMAC và đồng bộ cache trước/sau truy cập RAM. T0 tập hợp những công việc này vào các platform hook để T1 gọi.
+Trong kiến trúc ngăn xếp SPI 3 tầng (`T0` $\rightarrow$ `T1` $\rightarrow$ `T2`), **Tầng 0 (Platform SoC Layer)** đóng vai trò là lớp trừu tượng phần cứng cấp hệ thống (SoC Integration Layer) bao quanh khối IP bộ điều khiển Synopsys DesignWare APB SSI (`SPI0` tại `0x04180000`).
 
-Nếu đặt toàn bộ thao tác này trong driver thiết bị, mỗi thiết bị sẽ phải biết địa chỉ clock, GPIO và DMAC; nhiều caller có thể cấu hình phần cứng theo các cách xung đột. T0 tạo một đầu mối cho tài nguyên SoC. Tuy nhiên, việc tách file tự nó không tạo khóa liên lõi hay cơ chế sở hữu tài nguyên: source hiện dựa vào caller để tuần tự hóa.
+Tầng 0 **không** can thiệp vào giao thức của thiết bị ngoại vi (Sensor, Flash, Màn hình) và **không** quản lý máy trạng thái khung truyền của thanh ghi SPI0 (`CTRLR0`, `BAUDR`, `DR`, `IMR`, `DMACR` thuộc về Tầng 1). Thay vào đó, Tầng 0 chịu trách nhiệm độc quyền với **5 nhóm tài nguyên phần cứng cấp SoC SG2002**:
 
-## 2. Các file và quan hệ phụ thuộc
+1. **Clock Tree & Soft-Reset (`CLKGEN` & `RSTGEN`)**:
+   - Đọc cây xung nhịp phần cứng (`clk_byp_0` tại `0x03002030` và `div_clk_spi` tại `0x03002100`) để xác định tần số `clk_spi` thực tế (`25 MHz` XTAL hoặc `1500 MHz / div`, mặc định `187.5 MHz`).
+   - Mở cổng xung nhịp APB GPIO (`clk_en_0` bit 29), APB SPI0 (`clk_en_1` bit 9) và xung nhịp chức năng `clk_spi` (`clk_en_3` bit 6) kèm đọc kiểm chứng (readback).
+   - Phát xung Reset cứng tích cực mức thấp (`SOFT_RSTN_1` tại `0x03003004` bit 8) cho khối `SPI0` kèm đọc kiểm chứng.
+2. **Mở khóa MIPI DSI D-PHY, PADCTRL & Pinmux (`FPC2`)**:
+   - Chuyển 5 lane của khối **MIPI DSI D-PHY (`0x0A0D1000`)** sang chế độ Digital GPO/GPI (`0x00001F1F`) để tín hiệu số 1.8V đi qua cụm chân `MIPI_TX` ra cổng **FPC2**.
+   - Thiết lập điện học Pad (`PADCTRL` tại `0x03001C70..0x03001C7C` với giá trị `0x44`: bật Pull-Up và Drive Strength).
+   - Ánh xạ `FMUX` (`0x030011A4..0x030011B0`) cho `SPI0_SCK`, `XGPIOC_17` (CS), `SPI0_SDO` (MOSI), `SPI0_SDI` (MISO) và kiểm chứng lại bằng readback.
+3. **Điều khiển Chip-Select bằng GPIO (`GPIOC17`)**:
+   - Nạp trước mức logic CAO (`DR = 1`) và hướng Output (`DDR = 1`) cho `GPIOC17` (`0x03022000`) **trước khi** chuyển mux chân `PAD_MIPI_TXP2` sang `XGPIOC_17`, ngăn chặn xung chọn giả (spurious CS glitch) lúc khởi tạo.
+   - Giữ và nhả chân `CS` xuyên suốt toàn bộ gói tin đa phân đoạn (multi-segment message) theo lệnh của Tầng 1/Tầng 2.
+4. **Quản lý Ngắt phần cứng (`PLIC` + FreeRTOS Semaphore) — Khởi tạo theo nhu cầu (Lazy Init)**:
+   - Chỉ đăng ký ngắt `SPI_0_SSI_INTR` (IRQ 37) và khởi tạo `StaticSemaphore_t` khi Tầng 1 gọi `hal_spi_prepare_irq()`.
+   - Xóa sạch token cũ còn sót trong Semaphore khi khởi tạo/tái khởi tạo, đưa Task vào trạng thái ngủ (`Blocked`) chờ ISR của Tầng 1 báo hoàn tất.
+5. **Tích hợp System DMA (`DW_axi_dmac`) & Đồng bộ D-Cache RISC-V C906L — Khởi tạo theo nhu cầu (Lazy Init)**:
+   - Chỉ chạm vào thanh ghi Clock/Reset SDMA, bảng ánh xạ kênh `sdma_dma_ch_remap0` (`0x03000154`), `sdma_dma_int_mux` (`0x03000298`) và `DW_axi_dmac` (`0x04330000`) khi `hal_spi_prepare_dma()` được gọi cùng cam kết `resources_reserved = true` và tất cả các kênh DMAC đang rảnh (`CHEN_L & 0xFF == 0`).
+   - Đảm bảo tính nhất quán bộ nhớ đệm D-Cache (Clean TX, Flush RX đầu phiên, Invalidate RX cuối phiên và khi lỗi giữa chừng) theo kích thước dòng cache `64-byte` của nhân T-Head C906L.
 
-| File | Nội dung cần đọc |
-| --- | --- |
-| [`hal_spi_platform.c`](../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform.c) | Register SoC, state tĩnh, cache helpers, 12 platform hook, DMAC programming |
-| [`hal_spi_platform_limits.h`](../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform_limits.h) | Clock mặc định, FIFO depth, threshold, divider và kích thước block DMA |
-| [`hal_dw_spi.h`](../../freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h) | Prototype T0, kiểu callback IRQ, mã lỗi và state T1 |
-| [`hal_dw_spi.c`](../../freertos/cvitek/hal/cv181x/spi/src/hal_dw_spi.c) | Caller T1: init, IRQ transfer, DMA transfer, abort |
-| [`spi.c`](../../freertos/cvitek/driver/spi/src/spi.c) | Caller T2: mutex, backend và thời điểm assert/deassert CS |
+---
 
-T0 hiện phụ thuộc FreeRTOS cho semaphore, `request_irq()` cho PLIC, `mmio_*` để truy cập register và `arch_helpers.h` cho cache. Phần này có một instance tĩnh dành cho SPI0, chưa phải lớp platform đa bus.
+## 2. Cấu trúc Phân tách File của Tầng 0
+
+Tầng 0 được tách thành **2 file mã nguồn thực thi** và **2 file header** để tách bạch phần I/O cơ bản (luôn chạy khi khởi tạo bus) với phần tài nguyên nâng cao (IRQ/DMA chỉ khởi tạo khi được yêu cầu):
+
+| File | Đường dẫn | Vai trò trong Tầng 0 |
+| :--- | :--- | :--- |
+| **`hal_spi_platform_limits.h`** | [`freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform_limits.h`](../../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform_limits.h) | Định nghĩa các hằng số giới hạn phần cứng: `HAL_SPI_REF_CLOCK_HZ` (`187.5 MHz`), trần `HAL_SPI_MAX_SCK_HZ` (`46.875 MHz` theo TRM §21.3.2), `HAL_SPI_FIFO_DEPTH` (`8`), giới hạn `BAUDR` (`2..65534`), độ trễ lấy mẫu tối đa (`8`) và kích thước khối DMA tối đa (`4096` khung). |
+| **`hal_dw_spi.h`** | [`freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h`](../../../freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h) | Khai báo hợp đồng 12 hàm Platform Hooks của Tầng 0 cho Tầng 1/Tầng 2 gọi. |
+| **`hal_spi_platform_io.c`** | [`freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform_io.c`](../../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform_io.c) | Thực thi 6 hàm I/O nền tảng: đọc cây clock `clk_spi`, bật clock gate, phát xung reset `SPI0`, mở khóa MIPI DSI D-PHY, cấu hình `PADCTRL` + `FMUX` cho FPC2 và điều khiển `GPIOC17` CS. |
+| **`hal_spi_platform.c`** | [`freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform.c`](../../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform.c) | Thực thi 6 hàm truyền dẫn nâng cao: đăng ký/chờ/đánh thức ngắt PLIC (`SPI_0_SSI_INTR`) và khởi tạo/truyền/hủy kênh System DMA (`DW_axi_dmac`) kèm đồng bộ D-Cache 64-byte. |
 
 ```mermaid
 flowchart TB
-    A["Ứng dụng: spi.h"] --> T2["T2: bus/device · mutex · chọn backend"]
-    T2 --> T1["T1: DW SSI · FIFO · cấu hình SCK"]
-    T2 -->|giữ/nhả CS theo message| CS["T0: GPIO CS"]
-    T1 --> CLK["T0: clock/reset/pinmux"]
-    T1 --> IRQ["T0: PLIC + semaphore"]
-    T1 --> DMA["T0: DMAC + cache"]
-    IRQ -->|callback ISR| T1
-    DMA --> RAM["RAM ↔ SPI_DR"]
+    subgraph T2_LAYER["Tầng 2: FreeRTOS SPI Driver (spi.c)"]
+        T2["Quản lý Bus Mutex · Chọn Backend (POLL/IRQ/DMA/AUTO)\nPreflight hal_spi_prepare_irq/dma() trước khi kéo CS"]
+    end
+
+    subgraph T1_LAYER["Tầng 1: DW APB SSI Controller HAL (hal_dw_spi.c)"]
+        T1["Quản lý CTRLR0 · BAUDR (<= 46.875 MHz) · FIFO · IMR · DMACR"]
+    end
+
+    subgraph T0_LAYER["Tầng 0: Platform SoC Layer"]
+        subgraph T0_IO["hal_spi_platform_io.c (Khởi tạo trong hal_spi_init)"]
+            CLK["Clock Tree Readback & Gate\n(0x03002000..0x03002100)"]
+            RST["Soft-Reset SPI0\n(0x03003004 bit 8)"]
+            PIN["MIPI DSI D-PHY (0x0A0D1000)\nPADCTRL (0x03001C70..7C)\nFMUX (0x030011A4..B0)"]
+            CS["Software CS GPIOC17\n(0x03022000 / 0x03022004)"]
+        end
+        subgraph T0_ADV["hal_spi_platform.c (Khởi tạo Lazy khi dùng IRQ/DMA)"]
+            IRQ["PLIC IRQ 37\n+ Static Binary Semaphore"]
+            DMA["DW_axi_dmac (0x04330000)\nCh0 RX (Req 16) / Ch1 TX (Req 17)\n+ C906 D-Cache 64B Sync"]
+        end
+    end
+
+    T2 --> T1
+    T2 -->|Giữ/nhả CS xuyên suốt Message| CS
+    T1 -->|Luôn gọi khi init bus| T0_IO
+    T1 -->|Chỉ gọi khi message yêu cầu IRQ/DMA| T0_ADV
 ```
 
-T1 quyết định mode, BAUDR, FIFO threshold và DMACR của SPI. T0 quyết định cách truy cập clock/pad/PLIC/DMAC của SoC. T2 trực tiếp gọi hook CS để giữ CS qua các segment; do đó không phải mọi lời gọi T0 đều đi qua T1.
+---
+
+## 3. Bản đồ Thanh ghi Phần cứng Tầng 0 (Đã đối chiếu TRM & SDK)
+
+### 3.1. Nhóm Clock, Reset, D-PHY, Pinmux và GPIO CS (trong `hal_spi_platform_io.c`)
+
+| Khối chức năng | Tên thanh ghi / Hằng số | Địa chỉ vật lý | Bit / Giá trị cấu hình | Căn cứ xác minh |
+| :--- | :--- | :--- | :--- | :--- |
+| **SPI0 Controller** | `SPI0_BASE_ADDR` | `0x04180000` | Base MMIO của DW APB SSI0 | TRM §21.3 |
+| **Clock Gate GPIO** | `CLK_EN_0_REG` | `0x03002000` | Bit `29` (`1U << 29`): Mở `clk_apb_gpio` | TRM Bảng 8-52 |
+| **Clock Gate APB SPI0** | `CLK_EN_1_REG` | `0x03002004` | Bit `9` (`1U << 9`): Mở `clk_apb_spi0` | TRM Bảng 8-53 |
+| **Clock Gate `clk_spi`** | `CLK_EN_3_REG` | `0x0300200C` | Bit `6` (`1U << 6`): Mở functional clock `clk_spi` | TRM Bảng 8-55 |
+| **Clock Bypass `clk_spi`** | `CLK_BYP_0_REG` | `0x03002030` | Bit `30` (`1U << 30`): `1` = XTAL 25 MHz, `0` = chia từ FPLL | TRM Bảng 8-58 |
+| **Clock Divider `clk_spi`** | `DIV_CLK_SPI_REG` | `0x03002100` | Bit `0`: Reset dis (`1` = chạy)<br>Bit `3`: `0` = chia 8 mặc định (`187.5 MHz`), `1` = chia theo bits `[20:16]` | TRM Bảng 8-89 |
+| **Soft-Reset SPI0** | `RESET_BANK1_REG` | `0x03003004` | Bit `8` (`1U << 8`): `reg_soft_reset_x_spi0` (tích cực mức thấp) | TRM Bảng 7-3 |
+| **MIPI DSI D-PHY** | `DSI_DPHY_BASE_ADDR` | `0x0A0D1000` | `+0x00` (`EN`=0), `+0x9C` (`LANE_SEL`=`0xFFFFF`), `+0x64` (`PD`=`0x1F1F`), `+0x4C` (`LPTX_OV`=`0x1F001F`), `+0x54` (`PD_EN_TX`=`0x1F1F`), `+0x50` (`PD_TXDRV`=`0x1F1F1F1F`), `+0xC4` (`GPO`=`0x1F1F`), `+0xC8` (`GPI`=`0x1F1F`) | `top_reg.h` + Board Loopback |
+| **PADCTRL FPC2** | `PADCTRL_PAD_MIPI_TXM2`<br>`PADCTRL_PAD_MIPI_TXP2`<br>`PADCTRL_PAD_MIPI_TXM1`<br>`PADCTRL_PAD_MIPI_TXP1` | `0x03001C70`<br>`0x03001C74`<br>`0x03001C78`<br>`0x03001C7C` | Giá trị `0x44`: Bật Pull-Up và cấu hình Drive Strength cho 4 chân SPI0 trên cổng FPC2 | Board Loopback |
+| **FMUX Pinmux FPC2** | `PINMUX_PAD_MIPI_TXM2` (FPC2.15)<br>`PINMUX_PAD_MIPI_TXP2` (FPC2.14)<br>`PINMUX_PAD_MIPI_TXM1` (FPC2.18)<br>`PINMUX_PAD_MIPI_TXP1` (FPC2.17) | `0x030011A4`<br>`0x030011A8`<br>`0x030011AC`<br>`0x030011B0` | `6` (`SPI0_SCK`)<br>`3` (`XGPIOC_17` — Software CS)<br>`6` (`SPI0_SDO` / MOSI)<br>`6` (`SPI0_SDI` / MISO) | `cv181x_reg_fmux_gpio.h` & `cv181x_pinlist_swconfig.h` |
+| **GPIO Port C (CS)** | `GPIOC_SWPORTA_DR`<br>`GPIOC_SWPORTA_DDR` | `0x03022000`<br>`0x03022004` | Bit `17` (`1U << 17`):<br>- `DDR[17] = 1` (Output)<br>- `DR[17] = 0` (Assert CS), `1` (Deassert CS) | TRM GPIO & Schematic |
+
+### 3.2. Nhóm PLIC IRQ và System DMA (trong `hal_spi_platform.c`)
+
+| Khối chức năng | Tên thanh ghi / Hằng số | Địa chỉ / Giá trị | Ý nghĩa cấu hình | Căn cứ xác minh |
+| :--- | :--- | :--- | :--- | :--- |
+| **Ngắt PLIC SPI0** | `SPI_0_SSI_INTR` | IRQ `37` | Ngắt phần cứng của `SPI0` đưa vào bộ điều khiển PLIC trên C906L | `intr_conf.h` |
+| **Clock Gate SDMA** | `CLK_EN_1_REG` | `0x03002004` | Bit `1` (`1U << 1`): Mở `clk_sdma_axi` | TRM Bảng 8-53 |
+| **Soft-Reset SDMA** | `RESET_BANK0_REG` | `0x03003000` | Bit `18` (`1U << 18`): `reg_soft_reset_x_sdma` (tích cực mức thấp) | TRM Bảng 7-2 |
+| **DMA Channel Remap** | `TOP_SDMA_CH_REMAP0_REG` | `0x03000154` | - Bits `[5:0] = 16` (`dma_rx_req_spi0` $\rightarrow$ Kênh 0)<br>- Bits `[13:8] = 17` (`dma_tx_req_spi0` $\rightarrow$ Kênh 1)<br>- Bit `31 = 1` (`update_dma_remap_0_3`) | TRM Bảng 9-1 & §9.3.2.4 |
+| **DMA Interrupt Mux** | `TOP_SDMA_INT_MUX_REG` | `0x03000298` | Dịch trái `20` bit (`SDMA_INT_MUX_C906L_SHIFT`) để định tuyến ngắt Kênh 0, Kênh 1 về C906L | TRM §9.3.2.15 |
+| **DW AXI DMAC Global** | `DW_DMAC_CFG`<br>`DW_DMAC_CHEN_L`<br>`DW_DMAC_CHEN_H` | `0x04330010`<br>`0x04330018`<br>`0x0433001C` | - `CFG = 0x3` (`DMAC_EN | INT_EN`)<br>- `CHEN_L`: Bật/tắt kênh (bits `[7:0]` enable, `[15:8]` write-enable)<br>- `CHEN_H`: Hủy kênh khẩn cấp (abort) | TRM Chương System DMA |
+| **Kênh DMA 0 (RX)** | `DW_DMAC_CH_BASE(0)` | `0x04330100` | Đọc từ `SPI0_DR` (`0x04180060`) ghi vào RAM (`PER2MEM`, `SRC_PER = 0`, `PRIO = 1`) | TRM Chương System DMA |
+| **Kênh DMA 1 (TX)** | `DW_DMAC_CH_BASE(1)` | `0x04330200` | Đọc từ RAM ghi vào `SPI0_DR` (`0x04180060`) (`MEM2PER`, `DST_PER = 1`, `PRIO = 0`) | TRM Chương System DMA |
+
+---
+
+## 4. Chi tiết Thiết kế và Hoạt động của 12 Hàm API Tầng 0
+
+### 4.1. Nhóm Clock & Reset (`hal_spi_platform_io.c`)
+
+1. **`uint32_t hal_spi_platform_get_ref_clock_hz(void)`**:
+   - Đọc thanh ghi `CLK_BYP_0_REG` (`0x03002030`):
+     - Nếu bit 30 (`CLK_BYP_0_SPI_BIT`) bằng `1`: nguồn xung nhịp `clk_spi` đang được nối tắt (bypass) trực tiếp vào thạch anh ngoại `XTAL`, hàm trả về **`25000000U` (25 MHz)**.
+     - Nếu bit 30 bằng `0`: nguồn xung nhịp đi qua bộ chia `DIV_CLK_SPI_REG` (`0x03002100`) lấy từ `FPLL` (`1.5 GHz`).
+   - Kiểm tra bit 0 (`DIV_CLK_SPI_RESET_DIS_BIT`) của `DIV_CLK_SPI_REG`: nếu bằng `0` (bộ chia đang bị giữ Reset), trả về `0U` để báo lỗi cấu hình clock.
+   - Kiểm tra bit 3 (`DIV_CLK_SPI_REG_SEL_BIT`):
+     - Nếu bằng `1`: lấy hệ số chia từ trường `[20:16]`. Nếu hệ số chia bằng `0`, trả về `0U`.
+     - Nếu bằng `0`: phần cứng dùng hệ số chia khởi định là `8`.
+   - Trả về `1500000000UL / div_factor` (mặc định là **`187500000U` — 187.5 MHz**).
+   - Ở Tầng 1, `hal_spi_configure()` áp trần `HAL_SPI_MAX_SCK_HZ = 46875000U` (46.875 MHz, tương ứng `BAUDR >= 4` khi `clk_spi = 187.5 MHz`) theo đúng giới hạn vật lý của TRM §21.3.2.
+
+2. **`hal_spi_status_t hal_spi_platform_clock_enable(uintptr_t reg_base)`**:
+   - Kiểm tra `reg_base == 0x04180000UL`, nếu sai trả về `HAL_SPI_ERR_INVALID`.
+   - Mở cổng clock APB cho GPIO (`0x03002000` bit 29), clock APB cho SPI0 (`0x03002004` bit 9) và functional clock `clk_spi` (`0x0300200C` bit 6).
+   - Đọc kiểm chứng (readback) cả 2 bit clock của SPI0 và kiểm tra `hal_spi_platform_get_ref_clock_hz() != 0U`. Nếu hợp lệ trả về `HAL_SPI_OK`, ngược lại trả về `HAL_SPI_ERR_INVALID`.
+
+3. **`hal_spi_status_t hal_spi_platform_reset(uintptr_t reg_base)`**:
+   - Kiểm tra `reg_base == 0x04180000UL`.
+   - Kéo bit 8 của `RESET_BANK1_REG` (`0x03003004`) xuống `0` để kích hoạt Reset cứng khối `SPI0`, chờ `64` chu kỳ `nop`, sau đó kéo bit 8 lên `1` để nhả Reset và chờ thêm `64` chu kỳ `nop`.
+   - Đọc kiểm chứng lại bit 8 của `0x03003004`; nếu đã lên `1` thì trả về `HAL_SPI_OK`.
+
+### 4.2. Nhóm GPIO CS & Pinmux FPC2 (`hal_spi_platform_io.c`)
+
+Để triệt tiêu nguy cơ xuất hiện xung chọn giả (glitch xuống mức thấp) trên đường `CS` khi khởi tạo:
+- Trong `hal_spi_init()`, **`hal_spi_platform_cs_init()` được gọi TRƯỚC `hal_spi_platform_pinmux_init()`**:
+  1. `hal_spi_platform_cs_init()` ghi bit 17 của `GPIOC_SWPORTA_DR` (`0x03022000`) lên mức `1` (Inactive HIGH) trước, rồi mới đặt bit 17 của `GPIOC_SWPORTA_DDR` (`0x03022004`) lên `1` (Output).
+  2. `hal_spi_platform_pinmux_init()` mở khóa chế độ Digital GPO/GPI (`0x00001F1F`) trên khối **MIPI DSI D-PHY (`0x0A0D1000`)**, cấu hình `PADCTRL` (`0x03001C70..0x03001C7C = 0x44`) và chuyển `FMUX` của 4 chân `PAD_MIPI_TXM2` (`SCK`), `PAD_MIPI_TXP2` (`XGPIOC_17`), `PAD_MIPI_TXM1` (`SDO`), `PAD_MIPI_TXP1` (`SDI`).
+  3. Cuối `hal_spi_platform_pinmux_init()`, hàm đọc kiểm chứng lại thanh ghi `GPO`/`GPI` của DSI D-PHY, `DDR` của `GPIOC17` và cả 4 thanh ghi `FMUX`. Nếu bất kỳ thanh ghi nào không khớp, hàm trả về lỗi ngay lập tức.
+- Trong quá trình truyền nhận, `hal_spi_platform_cs_set(true)` kéo `GPIOC17` xuống `0` và `hal_spi_platform_cs_set(false)` kéo `GPIOC17` lên `1`.
+
+### 4.3. Nhóm Ngắt PLIC (`hal_spi_platform.c`)
+
+1. **`hal_spi_platform_irq_init(uintptr_t reg_base, hal_spi_irq_handler_t handler, void *ctx)`**:
+   - Chỉ được gọi khi Tầng 1 thực thi `hal_spi_prepare_irq()` (do Tầng 2 yêu cầu trước khi bắt đầu một gói tin cần `SPI_BACKEND_IRQ`).
+   - Khởi tạo `StaticSemaphore_t` (`xSemaphoreCreateBinaryStatic`) nếu chưa tạo.
+   - **Dọn sạch token cũ**: chạy vòng lặp `while (xSemaphoreTake(g_spi0_plat.irq_sem, 0U) == pdTRUE) {}` để bảo đảm không còn token completion tồn đọng từ phiên truyền trước.
+   - Lưu `handler` và `ctx`, xóa cờ `irq_signaled = false`, và gọi `request_irq(SPI_0_SSI_INTR, spi0_plic_irq_trampoline, 0UL, "spi0_dw_ssi", &g_spi0_plat)` ở lần đầu tiên.
+2. **`hal_spi_platform_irq_wait(uintptr_t reg_base, uint32_t timeout_ms)`**:
+   - Khi FreeRTOS Scheduler đang chạy (`taskSCHEDULER_RUNNING`), chuyển đổi `timeout_ms` sang số tick (tối thiểu 1 tick) và gọi `xSemaphoreTake(g_spi0_plat.irq_sem, ticks)` để đưa Task vào trạng thái ngủ (`Blocked`), giải phóng 100% CPU cho các tác vụ khác.
+   - Khi Scheduler chưa chạy, spin chờ cờ `g_spi0_plat.irq_signaled`.
+3. **`hal_spi_platform_irq_notify(uintptr_t reg_base)`**:
+   - Được gọi từ bên trong `hal_spi_isr()` khi toàn bộ khung dữ liệu đã truyền/nhận xong hoặc khi xảy ra lỗi FIFO.
+   - Đặt `irq_signaled = true`, gọi `xSemaphoreGiveFromISR()` kèm `portYIELD_FROM_ISR()` để đánh thức Task ngay khi thoát ngắt.
+
+### 4.4. Nhóm System DMA & Đồng bộ D-Cache (`hal_spi_platform.c`)
+
+1. **Cơ chế Bảo vệ Quyền Sở hữu Tài nguyên trong `hal_spi_platform_dma_init(reg_base, resources_reserved)`**:
+   - Trên SoC SG2002, bộ điều khiển `DW_axi_dmac` (`0x04330000`) và bảng `sdma_dma_ch_remap0` là tài nguyên dùng chung toàn hệ thống (mặc định DTS có thể gán Kênh 0/1 cho I2S).
+   - Do đó:
+     - Nếu `resources_reserved == false`, hàm từ chối ngay với `HAL_SPI_ERR_UNSUPPORTED` **trước khi thực hiện bất kỳ lệnh ghi MMIO nào**.
+     - Sau khi bật clock `clk_sdma_axi` (`0x03002004` bit 1) và nhả reset `SDMA` (`0x03003000` bit 18), hàm đọc `DW_DMAC_CHEN_L` (`0x04330018`). Nếu bất kỳ kênh nào trong 8 kênh đang chạy (`(chen & 0xFFU) != 0U`), hàm từ chối với `HAL_SPI_ERR_BUSY` thay vì cưỡng bức tắt kênh hay ghi đè bảng remap.
+     - Khi xác nhận toàn bộ kênh đang rảnh, hàm ánh xạ `CVI_DMA_REQ_SPI0_RX (16)` vào Kênh 0, `CVI_DMA_REQ_SPI0_TX (17)` vào Kênh 1 (kèm bit 31 `SDMA_REMAP_UPDATE_BIT`), định tuyến ngắt về C906L và bật `DW_DMAC_CFG`.
+
+2. **Đồng bộ D-Cache 64-byte và Chia khối trong `hal_spi_platform_dma_transfer(...)`**:
+   - Kiểm tra tràn số nguyên (`frames > SIZE_MAX / frame_bytes`) và kiểm tra căn lề chẵn 2-byte đối với khung 9..16 bit (`frame_bytes == 2`).
+   - Sử dụng 2 dòng cache tĩnh căn lề 64-byte tách biệt (`g_dma_tx_dummy_line` và `g_dma_rx_dummy_line`) cho các giao dịch khuyết bộ đệm (`tx_buf == NULL` hoặc `rx_buf == NULL`), ngăn chặn triệt để lỗi False-Sharing giữa kênh đọc và kênh ghi.
+   - **Trước khi chạy DMA**:
+     - Gọi `platform_dcache_clean()` trên vùng `tx_buf` (hoặc `g_dma_tx_dummy_line`).
+     - Gọi `platform_dcache_prepare_rx()` (`flush_dcache_range`) trên vùng `rx_buf` (hoặc `g_dma_rx_dummy_line`).
+   - **Chia khối tuần tự**:
+     - Chia tổng số khung `frames` thành các khối tối đa `HAL_SPI_DMA_MAX_BLOCK_FRAMES` (`4096` khung/khối).
+     - Trong mỗi khối (`dmac_run_single_block`), cấu hình Kênh 0 (RX) và Kênh 1 (TX) với `MSIZE = 0` (1 phần tử mỗi lần bắt tay), bật Kênh RX trước rồi bật Kênh TX sau.
+   - **Sau khi chạy DMA (kể cả khi thành công hay lỗi giữa chừng)**:
+     - Luôn gọi `platform_dcache_invalidate_rx()` trên `rx_buf` trước khi trả về để đảm bảo CPU luôn đọc dữ liệu mới nhất từ RAM vật lý.
 
-## 3. Trạng thái và bộ nhớ nội bộ
+3. **Hủy khẩn cấp `hal_spi_platform_dma_abort(uintptr_t reg_base)`**:
+   - Chỉ chạm vào thanh ghi DMAC nếu `g_spi0_plat.dma_initialized == true`.
+   - Tắt Kênh TX (Kênh 1) trước, Kênh RX (Kênh 0) sau qua `DW_DMAC_CHEN_L` (và `DW_DMAC_CHEN_H` nếu kênh chưa dừng ngay), chờ kênh hạ cờ enable rồi xóa sạch cờ ngắt trong `CH_INTCLEAR_L`.
 
-`g_spi0_plat` có kiểu `spi0_platform_state_t` và được cấp phát tĩnh:
+---
 
-| Trường | Ý nghĩa trong luồng chạy |
-| --- | --- |
-| `irq_sem_buf`, `irq_sem` | Vùng lưu static binary semaphore và handle dùng để block/wake task |
-| `irq_handler`, `irq_ctx` | Callback T1 và con trỏ `hal_spi_t` chuyển qua PLIC trampoline |
-| `irq_signaled` | Cờ completion dùng trong nhánh spin khi scheduler chưa chạy |
-| `irq_registered` | Tránh gọi lại đăng ký PLIC sau lần đầu thành công |
-| `dma_initialized` | Cho biết DMA đã đi qua routine init; không tự chứng minh phần cứng đã sẵn sàng |
+## 5. Trạng thái Xác minhHiện tại
 
-Hai mảng tĩnh `g_dma_tx_dummy_line` và `g_dma_rx_dummy_line`, mỗi mảng 64 byte và căn 64 byte, phục vụ các giao dịch thiếu buffer TX hoặc RX. Tách hai dòng tránh để DMA ghi dữ liệu bỏ đi lên dòng chứa từ fill mà DMA TX đang đọc.
-
-T0 không giữ toàn bộ payload, không cấp phát buffer ảnh hay packet của thiết bị. Buffer thật thuộc caller. Biến tĩnh giúp tránh cấp phát heap cho completion/dummy, nhưng cũng giới hạn một phiên sử dụng các tài nguyên này tại một thời điểm.
-
-## 4. Clock và reset
-
-### 4.1. `hal_spi_platform_clock_enable(reg_base)`
-
-Hàm nhận base của controller, chỉ thực hiện khi base bằng `0x04180000`. Nó đọc register clock rồi OR mask để mở gate. Ý nghĩa của gate là cho phép xung đi vào khối; gate không xác định tần số nguồn.
-
-Source hiện dùng `CLK_EN_1_REG=0x03002004`, bit 16. Khi đọc code cần biết mask này đang sai so với TRM: APB SPI0 ở bit 9 của bank này, functional clock SPI ở `0x0300200C` bit 6. Vì vậy không dùng dòng define hiện tại làm căn cứ nối/cấu hình board.
-
-### 4.2. `hal_spi_platform_reset(reg_base)`
-
-Hàm đọc reset register, clear bit để giữ reset, chờ `platform_short_delay(64)`, set lại bit rồi chờ tiếp. Mục đích là đưa state phần cứng về mặc định để T1 nạp lại cấu hình. Helper delay thực hiện vòng `nop`; số vòng không tương đương một thời gian microsecond cố định.
-
-Source hiện dùng bank 0 bit 16; TRM xác định reset SPI0 ở `0x03003004` bit 8. Hàm được gọi trong init và từ `hal_spi_abort()`, nên mapping reset ảnh hưởng cả lúc khởi động lẫn phục hồi lỗi.
-
-### 4.3. `hal_spi_platform_get_ref_clock_hz()`
-
-Hàm trả `HAL_SPI_REF_CLOCK_HZ=187500000`, không đọc clock tree. Trong `hal_spi_init()`, nếu caller truyền `ref_clock_hz=0`, T1 lấy giá trị này; nếu caller truyền khác 0, T1 dùng giá trị caller cung cấp.
-
-T1 tính SCK từ `ref_clock_hz / BAUDR`. Do đó trường này phải mô tả clock thực sự đang cấp, không phải tốc độ muốn đặt. Muốn đặt SCK của slave dùng `sck_hz` ở cấu hình device. Giá trị mặc định 187.5 MHz hiện là giả định cấu hình của source.
-
-## 5. D-PHY, pad, pinmux và GPIO CS
-
-`hal_spi_platform_pinmux_init()` thực hiện ba nhóm thao tác: ghi recipe D-PHY, read-modify-write pad control, rồi ghi mux function. Ba nhóm này có mục đích khác nhau:
-
-| Nhóm | Mục đích |
-| --- | --- |
-| D-PHY | Cho tín hiệu digital đi qua khối pad dùng chung với MIPI |
-| Pad control | Đặt pull-up/pull-down và drive strength |
-| Pinmux | Chọn IP nào nối tới từng pad vật lý |
-
-Trong source hiện tại, hàm ghi CSI RX base `0x0A0D0000` với `0x1F01`, sau đó đặt các pad mang tên SD1 và function 1. Đây là luồng ghi hiện có, nhưng bảng SDK cho SD1 function 1 là SPI2. Đường SPI0 FPC2 đã đối chiếu dùng các pad sau:
-
-| Tín hiệu | FPC2 | Pad và mux | Function |
-| --- | --- | --- | --- |
-| SCK | 15 | MIPI_TXM2, `0x030011A4` | 6 |
-| CS GPIO | 14 | MIPI_TXP2, `0x030011A8` | 3 = GPIOC17 |
-| MOSI | 18 | MIPI_TXM1, `0x030011AC` | 6 |
-| MISO | 17 | MIPI_TXP1, `0x030011B0` | 6 |
-
-Vì vậy source cần sửa mapping trước khi ví dụ phần mềm có thể sử dụng đúng FPC2. Không đồng nhất CSI RX với DSI TX chỉ vì cùng có tên D-PHY.
-
-`hal_spi_platform_cs_init()` đọc DR/DDR GPIOC, set bit 17 của DR lên HIGH rồi set DDR thành output. `hal_spi_platform_cs_set(true)` clear DR bit 17 để assert; `false` set bit để deassert. Việc dùng GPIO cho CS cho phép T2 giữ lựa chọn slave qua nhiều segment, độc lập với việc CPU có nạp FIFO liên tục hay không.
-
-CS set/init không điều khiển SCK và không truyền dữ liệu. Chúng cũng không lấy mutex; T2 phải giữ bus lock trước khi dùng. Hiện pinmux được gọi trước cs_init, các hook trả void và không readback, nên đây chưa phải bảo đảm không có xung CS ngoài ý muốn.
-
-## 6. IRQ: từ PLIC tới task đang chờ
-
-### 6.1. Đăng ký
-
-`hal_spi_platform_irq_init(reg_base, handler, ctx)` kiểm base/handler, tạo semaphore tĩnh nếu chưa có, lưu callback/context, clear cờ `irq_signaled`, rồi đăng ký `spi0_plic_irq_trampoline` bằng `request_irq(SPI_0_SSI_INTR, ...)` nếu chưa đăng ký.
-
-Trampoline nhận ngắt PLIC và gọi `irq_handler(irq_ctx)`. Trong luồng hiện tại callback là ISR của T1. T0 không drain FIFO trong trampoline; T1 biết register và tiến độ truyền nên đảm nhiệm việc đó.
-
-### 6.2. Chờ và đánh thức
-
-```mermaid
-sequenceDiagram
-    participant Task as Task / T1
-    participant T0 as T0 IRQ hooks
-    participant P as PLIC
-    participant ISR as T1 ISR
-    Task->>T0: irq_init(handler, ctx)
-    T0->>P: request_irq(trampoline)
-    Task->>Task: nạp TX ban đầu và bật IMR
-    Task->>T0: irq_wait(timeout_ms)
-    Note over Task,T0: Task block trên semaphore khi scheduler chạy
-    P->>T0: trampoline()
-    T0->>ISR: handler(ctx)
-    ISR->>ISR: phục vụ FIFO; ghi irq_status
-    ISR->>T0: irq_notify() khi xong hoặc lỗi
-    T0-->>Task: semaphore đánh thức task
-    Task->>Task: kiểm irq_status và trạng thái controller
-```
-
-`irq_wait()` quy đổi timeout thành tick, tối thiểu một tick, rồi `xSemaphoreTake`. Nếu scheduler chưa chạy, code spin theo cờ `irq_signaled`. `timeout_ms=0` hiện dùng 1000 ms. `irq_notify()` set cờ, give semaphore bằng API FromISR và yêu cầu yield nếu cần.
-
-Return OK từ wait chỉ biểu thị đã nhận thông báo; kết quả truyền nằm trong `hal->irq_status` và register T1. Notify phải được gọi từ ISR theo thiết kế hiện tại. Khi phát triển tiếp cần xử lý token cũ/ISR đến muộn; source chưa drain semaphore ở mỗi đầu giao dịch.
-
-## 7. DMA: tổ chức truyền và các helper
-
-### 7.1. `hal_spi_platform_dma_init(reg_base)`
-
-Code bật clock SDMA, nhả reset nếu đang giữ, remap request SPI0 RX=16/TX=17 tới channel 0/1, ghi interrupt routing, bật DMAC rồi gọi disable hai channel. Sau đó đặt `dma_initialized=true`.
-
-Request ID xác định nguồn handshake ngoại vi; channel là tài nguyên thực hiện transfer. `SRC_PER`/`DST_PER` trong cấu hình channel dùng slot đã remap. Hai khái niệm này không thể thay thế nhau. Source chọn cứng channel 0/1; DTS SoC đang dùng chúng cho I2S, nên hệ thống phải giải quyết ownership trước khi gọi init thật.
-
-### 7.2. `hal_spi_platform_dma_transfer(...)`
-
-| Đối số | Cách T0 sử dụng |
-| --- | --- |
-| `reg_base` | Tính địa chỉ `SPI_DR = base + DW_SPI_DR` |
-| `tx_buf`, `rx_buf` | Con trỏ buffer hoặc NULL để dùng dummy |
-| `frames` | Số frame SPI cần trao đổi |
-| `frame_bytes` | 1 hoặc 2 byte trong RAM cho mỗi frame |
-| `fill_word` | Từ phát lặp lại khi TX NULL |
-| `timeout_ms` | Tham số giới hạn vòng chờ hiện tại; chưa phải deadline toàn transfer |
-
-Hàm kiểm base/frame size, init DMA nếu chưa init, đồng bộ cache, chia transfer thành block ≤4096 frame, chạy từng block, rồi invalidate RX khi tất cả thành công. T0 không tự assert/deassert CS trong vòng chia block.
-
-Với 10.000 frame, T0 tạo ba block 4096 + 4096 + 1808. Khi buffer có thật, địa chỉ block sau tăng `done_frames * frame_bytes`; khi dùng dummy, địa chỉ giữ nguyên. Block limit là lựa chọn source, không tự chứng minh giới hạn DMAC của mọi cấu hình SoC.
-
-### 7.3. `dmac_run_single_block()`
-
-Helper xóa interrupt status cũ, đặt địa chỉ/width/burst/count cho RX/TX, bật RX trước TX rồi chờ hoàn tất:
-
-| Channel | Source | Destination | Tăng địa chỉ |
-| --- | --- | --- | --- |
-| RX | SPI_DR | RX buffer hoặc dummy RX | Chỉ tăng destination khi RX buffer có thật |
-| TX | TX buffer hoặc dummy TX | SPI_DR | Chỉ tăng source khi TX buffer có thật |
-
-Độ rộng transfer là 8 hoặc 16 bit theo `frame_bytes`; count register nhận `block_frames-1`; burst chọn một phần tử. T1 phải bật request trong SPI DMACR và đặt DMATDLR/DMARDLR trước khi gọi T0.
-
-```mermaid
-flowchart LR
-    TX["RAM TX / fill_word"] --> TXDMA["DMAC TX"] --> DR["SPI_DR / FIFO"]
-    DR --> WIRE["SCK + MOSI/MISO"]
-    WIRE --> DR
-    DR --> RXDMA["DMAC RX"] --> RX["RAM RX / discard"]
-```
-
-Source chờ DMA bằng polling MMIO: kiểm lỗi SPI/DMA, completion flags và channel enable. DMA chuyển dữ liệu thay CPU, nhưng task vẫn chạy vòng chờ; source chưa dùng semaphore cho completion DMA. Timeout cũng được cấp lại mỗi block.
-
-### 7.4. Abort
-
-`hal_spi_platform_dma_abort()` disable TX rồi RX, xóa status cả hai. `dmac_channel_disable()` ghi disable, thử abort nếu vẫn enabled và kiểm tối đa 4096 vòng. Các hàm hiện trả void, nên caller chưa nhận được xác nhận lỗi khi channel không dừng. Khi đọc luồng cleanup cần phân biệt “đã gửi yêu cầu dừng” với “đã xác nhận DMA không truy cập RAM nữa”.
-
-## 8. Cache: vì sao cần ba thao tác
-
-CPU có thể nhìn thấy dữ liệu mới trong cache trong khi RAM còn cũ; DMAC truy cập RAM. Các helper căn đầu/cuối vùng nhớ theo cache line 64 byte:
-
-| Helper | Thời điểm | Mục đích |
-| --- | --- | --- |
-| `platform_dcache_clean` | Trước TX DMA | Đẩy dữ liệu CPU mới sửa xuống RAM |
-| `platform_dcache_prepare_rx` | Trước RX DMA | Flush vùng RX trước khi phần cứng ghi |
-| `platform_dcache_invalidate_rx` | Sau DMA thành công | Buộc CPU lấy dữ liệu RX mới từ RAM |
-
-TX NULL dùng một từ fill ở dummy TX và tắt tăng địa chỉ nguồn. RX NULL dùng dummy RX với địa chỉ đích cố định để tiếp tục drain dữ liệu full-duplex dù caller không cần nhận.
-
-Buffer thật phải tồn tại suốt transfer; CPU không được đồng thời sử dụng vùng mà DMA đang sở hữu. Các byte ngoài buffer nhưng chung cache line cũng cần được quản lý, vì invalidate thao tác theo cả dòng. Source hiện chỉ invalidate RX trên đường thành công; dữ liệu nhận một phần khi lỗi chưa có chính sách đầy đủ. Đây là giới hạn cần hiểu khi sử dụng API hiện tại.
-
-## 9. Luồng khởi tạo T0 qua T1/T2
-
-```text
-spi_bus_init(bus, cfg)                 [T2]
-  └─ hal_spi_init(hal, base, ref_hz)   [T1]
-       ├─ lấy ref clock nếu ref_hz=0  [T0]
-       ├─ clock_enable               [T0]
-       ├─ reset                      [T0]
-       ├─ pinmux_init                [T0]
-       ├─ cs_init + cs_set(false)    [T0]
-       ├─ irq_init(callback T1)      [T0]
-       ├─ dma_init                   [T0]
-       └─ quiesce_controller         [T1]
-```
-
-Đây là thứ tự source hiện thực hiện. IRQ và DMA init được gọi ngay trong init T1, kể cả khi device sau đó chọn polling; T1 hiện bỏ qua mã lỗi của hai hook này. T0 không có API deinit/unregister hoàn chỉnh để trả ownership lại cho Linux hoặc tác nhân khác.
-
-## 10. Cách sử dụng trong chương trình
-
-Ứng dụng tạo bus/device ở T2; `spi_bus_init()` tự đi qua các hook T0. Không cần gọi lại clock/reset/pinmux giữa mỗi message. Reset giữa một transfer sẽ phá trạng thái controller.
-
-Ví dụ dưới đây minh họa đúng struct/prototype hiện có. Tham số slave chỉ là ví dụ; mapping phần cứng và ownership nêu trên cần được sửa/chốt trước khi chạy trên board. Chọn polling cũng không tránh được DMA init vô điều kiện đang có trong T1.
-
-```c
-#include "spi.h"
-
-static spi_bus_t bus;
-static spi_device_t dev;
-
-spi_status_t example_init(void)
-{
-    const spi_bus_config_t bus_cfg = {
-        .reg_base = 0x04180000UL,
-        .ref_clock_hz = 0, /* T1 lấy mặc định từ T0; không đo clock */
-        .irq_threshold_frames = 32,
-        .dma_threshold_frames = 64,
-    };
-    const spi_device_config_t dev_cfg = {
-        .sck_hz = 500000,
-        .mode = 0,
-        .bits_per_word = 8,
-        .cs_id = SPI_CS0_GPIO,
-        .backend = SPI_BACKEND_POLL,
-        .rx_sample_dly = 0,
-        .lsb_first = false,
-    };
-    spi_status_t rc = spi_bus_init(&bus, &bus_cfg);
-    if (rc != SPI_OK)
-        return rc;
-    return spi_device_init(&dev, &bus, &dev_cfg);
-}
-
-spi_status_t example_exchange(const void *tx, void *rx, size_t bytes)
-{
-    /* 8 bit/frame: số frame bằng số byte. Gọi từ task sau init. */
-    return spi_transfer_one(&dev, tx, rx, bytes, 0xFF, 100);
-}
-```
-
-Khi phát triển T1, gọi `hal_spi_platform_irq_wait()` sau khi đã chuẩn bị tiến độ và bật interrupt SPI; ISR gọi `irq_notify()` khi hoàn tất/lỗi. Với DMA, T1 bật request SPI trước khi gọi `dma_transfer()`, tắt request sau khi hook trả về, rồi kiểm tra bus idle. Một lời gọi T0 DMA trực tiếp không tự configure mode/BAUDR, enable SPI, giữ CS hoặc khóa mutex.
-
-## 11. Thứ tự đọc source T0 để hiểu hết một lượt
-
-1. Đọc `hal_spi_platform_limits.h` và nhóm prototype trong `hal_dw_spi.h` để biết dữ liệu vào/ra.
-2. Đọc nhóm define register; đối chiếu tên trong source với bảng phần cứng khi có ghi chú sai lệch.
-3. Đọc `spi0_platform_state_t`, hai dummy buffer và ba cache helper.
-4. Đọc clock/reset, pinmux, CS và hàm lấy ref clock; đối chiếu với thứ tự `hal_spi_init()`.
-5. Đọc IRQ theo vòng callback: init → trampoline → ISR T1 → notify → wait trả về.
-6. Đọc DMA theo vòng dữ liệu: init → transfer → single block → completion/abort → invalidate RX.
-7. Quay lại `spi_transfer()` ở T2 để thấy mutex, CS và lựa chọn backend bao quanh T0/T1.
-
-Nguồn phần cứng: [TRM](../HW/TRM/TRM_v102.md), [schematic](../HW/Schematic/LicheeRV_Nano_70415_Schematic_AI.md), [register pinmux SDK](../../freertos/cvitek/hal/cv181x/config/cv181x_reg_fmux_gpio.h), [function select SDK](../../freertos/cvitek/hal/cv181x/config/cv181x_pinlist_swconfig.h). Các chi tiết review/kiểm chứng được giữ riêng trong [đánh giá source T0](spi_t0_source_review.md).
+1. **Kiểm thử Đơn vị và Tích hợp trên Host (`test_spi.c`)**:
+   - Đã chạy `bash freertos/cvitek/hal/cv181x/spi/tests/run.sh`: **PASS 100%** toàn bộ kịch bản (`POLL`, `IRQ`, `DMA`, `AUTO`, `LSB-first`, `Helpers`, `Fault Recovery`, chính sách mặc định chỉ `POLL`, khởi tạo trễ `prepare_irq`/`prepare_dma`, từ chối DMA khi chưa đặt `dma_resources_reserved`, truyền lỗi prepare về caller trước khi kéo CS).
+2. **Biên dịch Chéo (Cross-Compilation) cho Nhân RISC-V C906L (`riscv64-unknown-elf-gcc`)**:
+   - Đã biên dịch thành công cả 3 object của HAL SPI (`hal_dw_spi.c.obj`, `hal_spi_platform.c.obj`, `hal_spi_platform_io.c.obj`) đóng gói vào `libhal.a` và driver Tầng 2 (`spi.c.obj`) đóng gói vào `libdriver.a` với cờ `-Wall -Wextra`, **0 error, 0 warning**.
