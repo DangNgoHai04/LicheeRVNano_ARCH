@@ -23,10 +23,20 @@ extern "C" {
 #define DUAL_FRAME_BYTES         (IMG_W * DUAL_HEIGHT * 2)  /* 196,608 bytes = 192 KB */
 
 typedef enum {
-    MODE_IMAGE           = 0,  /* Ảnh màu giả lập YUV422 (Header 0xAA, 256x192) */
-    MODE_TEMP            = 1,  /* Ma trận nhiệt độ RAW16 (Header 0xCC / Y16, 256x192) */
-    MODE_DUAL            = 2   /* Kép: YUV422 (96KB đầu) + RAW16 (96KB sau) (256x384) */
+    MODE_IMAGE           = 0,  /* Ảnh màu giả lập YUV422 (Header 0xAA, 256x192, SCK 23.4375 MHz) */
+    MODE_TEMP            = 1,  /* Ma trận nhiệt độ Y16 (y16_preview_start + Header 0xAA, 256x192) */
+    MODE_DUAL            = 2   /* Kép: YUV422 (0xAA, 96KB) + RAW16 (0xCC, 96KB) (256x384, SCK 46.875 MHz) */
 } camera_mode_t;
+
+/* Thông tin định danh thiết bị & Firmware đọc từ ASIC-2121W lúc khởi tạo */
+typedef struct {
+    char fw_compile_date[65];   /* Ngày biên dịch Firmware (DEV_INFO_FW_COMPILE_DATE) */
+    char project_info[65];      /* Tên dự án / dòng chip (DEV_INFO_PROJECT_INFO) */
+    char fw_build_version[65];  /* Phiên bản bản dựng Firmware (DEV_INFO_FW_BUILD_VERSION_INFO) */
+    char pn[65];                /* Mã sản phẩm Part Number (DEV_INFO_GET_PN) */
+    char sn[65];                /* Số sê-ri Serial Number (DEV_INFO_GET_SN) */
+    bool probed;                /* Đánh dấu đã truy vấn thành công từ ASIC */
+} tiny1c_device_info_t;
 
 /* Cực trị nhiệt độ toàn khung (Tọa độ 0-based: X=0..255, Y=0..191) */
 typedef struct {
@@ -53,6 +63,8 @@ typedef struct {
  * 1. ĐIỀU KHIỂN VÒNG ĐỜI CAMERA & MÀN TRẬP (PREVIEW & SHUTTER / FFC)
  * ========================================================================= */
 ir_error_t core_init(uint8_t i2c_bus, uint8_t slave_addr);
+ir_error_t core_probe_device_info(tiny1c_device_info_t *out_info);
+const tiny1c_device_info_t *core_get_device_info(void);
 ir_error_t core_start(camera_mode_t mode, uint8_t fps);
 ir_error_t core_stop(void);
 camera_mode_t core_get_mode(void);

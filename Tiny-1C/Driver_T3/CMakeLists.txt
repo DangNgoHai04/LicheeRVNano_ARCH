@@ -1,45 +1,33 @@
-# Tầng 3: Cấu hình tích hợp CMake cho Driver Camera nhiệt Tiny1C (ASIC-2121W) trên FreeRTOS SG2002.
 cmake_minimum_required(VERSION 3.16.3)
-
 project(thermal_tiny1c C)
-
-set(CMAKE_C_STANDARD 99)
-
-include_directories(include)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-if(DEFINED TOP_DIR)
-    include_directories(${TOP_DIR}/driver/spi/include)
-    include_directories(${TOP_DIR}/driver/i2c/include)
-    include_directories(${TOP_DIR}/hal/cv181x/spi/include)
-    include_directories(${TOP_DIR}/hal/cv181x/i2c/include)
-    include_directories(${TOP_DIR}/driver/rtos_cmdqu/include)
-    include_directories(${TOP_DIR}/driver/common/include)
-    include_directories(${TOP_DIR}/common/include)
-    include_directories(${TOP_DIR}/common/include/riscv64)
-    include_directories(${TOP_DIR}/hal/cv181x/config)
-    include_directories(${TOP_DIR}/arch/riscv64/include)
-    include_directories(${TOP_DIR}/kernel/include/riscv64)
-    include_directories(${TOP_DIR}/../Source/include)
-    include_directories(${TOP_DIR}/../Source/portable/GCC/RISC-V)
-    include_directories(${TOP_DIR}/../Source/portable/GCC/RISC-V/chip_specific_extensions/thead_c906_rv64imafdc)
-    include_directories(${TOP_DIR}/../Tracealyzer/include)
-    include_directories(${TOP_DIR}/../Tracealyzer/config)
-    include_directories(${CMAKE_INSTALL_INC_PREFIX}/arch)
-    include_directories(${CMAKE_INSTALL_INC_PREFIX}/common)
-    include_directories(${CMAKE_INSTALL_INC_PREFIX}/kernel)
+set(CMAKE_C_STANDARD 11)
+set(T3_SRC src/data_rw.c src/vdcmd.c src/falcon_cmd.c src/hal_spi.c src/vospi.c src/core.c)
+add_library(thermal_tiny1c STATIC ${T3_SRC})
+target_include_directories(thermal_tiny1c PUBLIC include)
+if(DEFINED THERMAL_I2C_FREQ_HZ)
+    if(THERMAL_I2C_FREQ_HZ LESS 1000 OR THERMAL_I2C_FREQ_HZ GREATER 100000)
+        message(FATAL_ERROR "THERMAL_I2C_FREQ_HZ must be 1000..100000")
+    endif()
+    target_compile_definitions(thermal_tiny1c PRIVATE THERMAL_I2C_FREQ_HZ=${THERMAL_I2C_FREQ_HZ}U)
 endif()
-
-file(GLOB _SOURCES "src/*.c")
-file(GLOB _HEADERS "include/*.h")
-
-add_library(${PROJECT_NAME} STATIC ${_SOURCES})
-
 if(DEFINED TOP_DIR)
-    install(TARGETS ${PROJECT_NAME} DESTINATION lib)
-    install(FILES ${_HEADERS} DESTINATION include/task/thermal_tiny1c)
+    target_sources(thermal_tiny1c PRIVATE
+        ../App/rtos/thermal_service.c
+        ${TOP_DIR}/driver/i2c/src/soft_i2c.c
+        ${TOP_DIR}/hal/cv181x/i2c/src/hal_i2c_bitbang.c
+        ${TOP_DIR}/hal/cv181x/i2c/src/hal_i2c_gpio_platform.c)
+    target_include_directories(thermal_tiny1c PRIVATE
+        ../App/include
+        ${TOP_DIR}/driver/spi/include ${TOP_DIR}/driver/i2c/include
+        ${TOP_DIR}/hal/cv181x/spi/include ${TOP_DIR}/hal/cv181x/i2c/include
+        ${TOP_DIR}/hal/cv181x/config ${TOP_DIR}/hal/cv181x/pinmux/include
+        ${TOP_DIR}/driver/pinmux/include ${TOP_DIR}/driver/rtos_cmdqu/include
+        ${TOP_DIR}/driver/common/include ${TOP_DIR}/task/comm/include
+        ${TOP_DIR}/common/include ${TOP_DIR}/common/include/riscv64
+        ${TOP_DIR}/arch/riscv64/include ${TOP_DIR}/kernel/include/riscv64
+        ${TOP_DIR}/../Source/include ${TOP_DIR}/../Source/portable/GCC/RISC-V)
+    target_compile_definitions(thermal_tiny1c PRIVATE THEAD_C906 CONFIG_64BIT)
 else()
-    # Standalone build on Host
-    add_executable(thermal_test ${_SOURCES})
-    target_link_libraries(thermal_test pthread)
+    target_compile_definitions(thermal_tiny1c PUBLIC THERMAL_HOST_TEST)
+    target_link_libraries(thermal_tiny1c PUBLIC pthread)
 endif()

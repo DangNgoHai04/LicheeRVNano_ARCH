@@ -1,61 +1,28 @@
-# Tầng 3: Makefile kiểm thử độc lập trên Host (x86_64) và kiểm tra biên dịch chéo RISC-V với T0-T1-T2.
-CC          ?= gcc
-CFLAGS      := -Wall -Wextra -Werror -O2 -g -I./include -pthread
-
-RISCV_ROOT  ?= /home/duong/Workspace/LicheeSG-Nano-Build
-RISCV_CC    := $(RISCV_ROOT)/host-tools/gcc/riscv64-elf-x86_64/bin/riscv64-unknown-elf-gcc
-FREERTOS_DIR:= $(RISCV_ROOT)/freertos
-CVITEK_DIR  := $(FREERTOS_DIR)/cvitek
-
-RISCV_INC   := -I./include \
-               -I$(CVITEK_DIR)/driver/spi/include \
-               -I$(CVITEK_DIR)/driver/i2c/include \
-               -I$(CVITEK_DIR)/hal/cv181x/spi/include \
-               -I$(CVITEK_DIR)/hal/cv181x/i2c/include \
-               -I$(CVITEK_DIR)/driver/rtos_cmdqu/include \
-               -I$(CVITEK_DIR)/driver/common/include \
-               -I$(CVITEK_DIR)/common/include \
-               -I$(CVITEK_DIR)/common/include/riscv64 \
-               -I$(CVITEK_DIR)/hal/cv181x/config \
-               -I$(CVITEK_DIR)/driver/pinmux/include \
-               -I$(CVITEK_DIR)/hal/cv181x/pinmux/include \
-               -I$(CVITEK_DIR)/kernel/include/riscv64 \
-               -I$(CVITEK_DIR)/arch/riscv64/include \
-               -I$(CVITEK_DIR)/scripts/Only_C906_1 \
-               -I$(FREERTOS_DIR)/Source/include \
-               -I$(FREERTOS_DIR)/Source/portable/GCC/RISC-V \
-               -I$(FREERTOS_DIR)/Source/portable/GCC/RISC-V/chip_specific_extensions/thead_c906_rv64imafdc \
-               -I$(FREERTOS_DIR)/Tracealyzer/include \
-               -I$(FREERTOS_DIR)/Tracealyzer/config
-
-RISCV_FLAGS := -march=rv64imafdc -mabi=lp64d -mcmodel=medany \
-               -Wall -Wextra -Werror -O2 -ffunction-sections -fdata-sections \
-               $(RISCV_INC)
-
-SRCS        := $(wildcard src/*.c)
-OBJS        := $(SRCS:.c=.o)
-RISCV_OBJS  := $(SRCS:src/%.c=build_riscv/%.o)
-TARGET      := thermal_test
-
-.PHONY: all clean test riscv-check
-
-all: $(TARGET)
-
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-test: $(TARGET)
-	./$(TARGET)
-
-build_riscv/%.o: src/%.c
-	@mkdir -p build_riscv
-	$(RISCV_CC) $(RISCV_FLAGS) -c $< -o $@
-
-riscv-check: $(RISCV_OBJS)
-	@echo "[OK] Bien dich cheo RISC-V Tang 3 ket noi voi T0-T1-T2 trong freertos thanh cong!"
-
-clean:
-	rm -rf $(OBJS) $(TARGET) build_riscv
+ROOT := $(abspath ../../..)
+CC ?= cc
+CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -Iinclude -DTHERMAL_HOST_TEST -pthread
+SRCS := src/data_rw.c src/vdcmd.c src/falcon_cmd.c src/hal_spi.c src/vospi.c src/core.c
+RISCV_CC ?= $(ROOT)/host-tools/gcc/riscv64-elf-x86_64/bin/riscv64-unknown-elf-gcc
+RISCV_FLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -mcmodel=medany -mabi=lp64d -march=rv64imafdc -DTHEAD_C906 -DCONFIG_64BIT -Iinclude -I../App/include
+INCS := driver/i2c/include hal/cv181x/i2c/include driver/spi/include hal/cv181x/spi/include common/include common/include/riscv64 arch/riscv64/include kernel/include/riscv64 hal/cv181x/config hal/cv181x/pinmux/include driver/pinmux/include driver/rtos_cmdqu/include driver/common/include task/comm/include
+RISCV_FLAGS += $(addprefix -I$(ROOT)/freertos/cvitek/,$(INCS)) -I$(ROOT)/freertos/Source/include -I$(ROOT)/freertos/Source/portable/GCC/RISC-V
+.PHONY: all test riscv-check
+all: test
+build:
+	mkdir -p $@
+build/test_driver: $(SRCS) tests/test_driver.c $(wildcard include/*.h) | build
+	$(CC) $(CFLAGS) $(SRCS) tests/test_driver.c -o $@
+build/test_i2c_failure: $(SRCS) tests/test_i2c_failure.c $(wildcard include/*.h) | build
+	$(CC) $(CFLAGS) $(SRCS) tests/test_i2c_failure.c -o $@
+build/test_vospi: src/vospi.c tests/test_vospi.c $(wildcard include/*.h) | build
+	$(CC) $(CFLAGS) src/vospi.c tests/test_vospi.c -o $@
+test: build/test_driver build/test_i2c_failure build/test_vospi
+	./build/test_driver
+	./build/test_i2c_failure
+	./build/test_vospi
+riscv-check: | build
+	@set -e; for f in $(SRCS) ../App/rtos/thermal_service.c; do \
+	 echo "[REAL RISCV] $$f"; $(RISCV_CC) $(RISCV_FLAGS) -c $$f -o build/$$(basename $$f .c).o; done
+	$(dir $(RISCV_CC))riscv64-unknown-elf-nm -u build/hal_spi.o | grep -q spi_transfer_one
+	$(dir $(RISCV_CC))riscv64-unknown-elf-nm -u build/data_rw.o | grep -q soft_i2c_read_reg16
+	$(dir $(RISCV_CC))riscv64-unknown-elf-nm -u build/vdcmd.o | grep -q xQueueSemaphoreTake

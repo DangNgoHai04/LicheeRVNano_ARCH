@@ -1,7 +1,8 @@
 # Tài liệu Kiến trúc Chốt Tầng 0 (Platform SoC Layer) — I²C Bitbang trên SOPHGO SG2002 (CV181x)
 
-Cập nhật chốt: **09-11-2026**  
-Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V 64-bit C906L chạy FreeRTOS, GPIOA15 = SCL, GPIOA27 = SDA)**.
+Đối chiếu mã nguồn **25-11-2026**  
+Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V 64-bit C906L chạy FreeRTOS, GPIOA15 = SCL, GPIOA27 = SDA)**.  
+Tài liệu đi kèm trong repo `freertos`: [`freertos/cvitek/hal/cv181x/i2c/README.md`](../../../freertos/cvitek/hal/cv181x/i2c/README.md).
 
 ---
 
@@ -16,8 +17,9 @@ Tầng 0 **không** xử lý giao thức khung truyền I²C (START, STOP, đị
 2. **Giả lập Cực máng Hở (Open-Drain Emulation) trên `GPIOA`**:
    - Khối GPIO Synopsys DesignWare (`dw_apb_gpio` tại `0x03020000`) không có chế độ phần cứng Open-Drain riêng biệt cho từng chân mà điều khiển qua cặp thanh ghi **Data Register (`GPIOA_DR` = `0x03020000`)** và **Data Direction Register (`GPIOA_DDR` = `0x03020004`)**.
    - Tầng 0 nạp cố định bit 15 và bit 27 của `GPIOA_DR` bằng `0`. Khi cần kéo đường dây xuống mức thấp (`LOW`), Tầng 0 đặt `DDR = 1` (Output 0V). Khi cần nhả đường dây lên mức cao (`HIGH`), Tầng 0 đặt `DDR = 0` (Input / Hi-Z) để điện trở kéo lên ngoài (External Pull-Up) đưa đường dây lên mức logic 1, **tuyệt đối không bao giờ phát xung mức cao chủ động (Push-Pull HIGH)** gây xung đột dòng điện với Slave.
-3. **Cấu hình Pinmux Không Xung Giả (Glitch-Free Pinmux Initialization)**:
-   - Nhả hướng `GPIOA_DDR` về `0` (Input) và nạp chốt `GPIOA_DR = 0` **trước khi** chuyển `FMUX` của hai chân `PAD_SPK_EN` (`0x0300103C` $\rightarrow$ `XGPIOA_15`) và `PAD_EMMC_DAT3` (`0x03001058` $\rightarrow$ `XGPIOA_27`) sang Function `3`, kèm kiểm tra đọc ngược (readback verification).
+3. **Cấu hình Pull-Up IOBLK & Pinmux Không Xung Giả (Glitch-Free Initialization)**:
+   - Nhả hướng `GPIOA_DDR` về `0` (Input) và nạp chốt `GPIOA_DR = 0` **trước khi** cấu hình điện học pad (`SPK_EN_IOBLK` tại `0x03001908` và `EMMC_DAT3_IOBLK` tại `0x03001924`: xóa `PAD_PD` bit `3`, bật `PAD_PU` bit `2` để tránh `SPK_EN/A15` bị pull-down mặc định kéo xuống LOW) và chuyển `FMUX` của hai chân `PAD_SPK_EN` (`0x0300103C` $\rightarrow$ `XGPIOA_15`) và `PAD_EMMC_DAT3` (`0x03001058` $\rightarrow$ `XGPIOA_27`) sang Function `3`.
+   - Đọc kiểm chứng (readback) toàn bộ `FMUX`, `GPIOA_DDR` và `IOBLK`, sau đó chờ `50 µs` và kiểm tra mức thực tế trên `GPIOA_EXT` (`0x03020050`): nếu bus rảnh bị giữ LOW thì in cảnh báo `[T0-I2C] Idle line LOW` và trả `BB_NOT_READY`.
 4. **Bộ đếm Thời gian Thực Monotonic (`rdtime`)**:
    - Cung cấp hai hàm hook `now_us()` và `delay_us()` dựa trên thanh ghi bộ đếm phần cứng 64-bit `time` của kiến trúc RISC-V (`__asm__ volatile("rdtime %0")`), đảm bảo thời gian nửa chu kỳ xung nhịp (`half_us`), thời gian chờ Clock Stretching (`stretch_us`) và tổng thời gian giao dịch (`deadline`) luôn chính xác tuyệt đối ngay cả khi Task bị ngắt (ISR) hoặc bộ lập lịch RTOS tạm dừng.
 
@@ -44,7 +46,8 @@ flowchart TB
         subgraph T0_INIT["bb_gpio_platform_init() (Gọi 1 lần lúc khởi tạo)"]
             CLK["Clock Gate APB GPIO\n(0x03002000 bit 29)"]
             PRE["Preload Hi-Z & Latch 0\nGPIOA_DDR &= ~MASK\nGPIOA_DR  &= ~MASK"]
-            MUX["FMUX Pinmux + Readback\n0x0300103C = 3 (XGPIOA_15)\n0x03001058 = 3 (XGPIOA_27)"]
+            IOB["IOBLK Pull-Up (PAD_PU=bit2)\n0x03001908 (SPK_EN)\n0x03001924 (EMMC_DAT3)"]
+            MUX["FMUX Pinmux + Readback + 50us Idle Check\n0x0300103C = 3 (A15) · 0x03001058 = 3 (A27)"]
         end
         subgraph T0_HOOKS["4 Platform Hooks trong bb_io_t"]
             DRV["drive(ctx, scl, low)\nĐổi bit 15/27 trong GPIOA_DDR (0x03020004)\ndưới taskENTER_CRITICAL()"]
@@ -65,6 +68,8 @@ flowchart TB
 | Khối chức năng | Tên thanh ghi / Hằng số | Địa chỉ vật lý | Bit / Giá trị cấu hình | Căn cứ xác minh |
 | :--- | :--- | :--- | :--- | :--- |
 | **Clock Gate GPIO** | `CLK_EN_0` | `0x03002000` | Bit `29` (`1U << 29`): Mở `clk_apb_gpio` | [TRM Bảng 8-52](../../HW/TRM/TRM_v102.md) |
+| **IOBLK Pad SCL (A15)** | `SPK_EN_IOBLK` | `0x03001908` | Xóa `PAD_PD` (`1U << 3`), bật `PAD_PU` (`1U << 2`) theo miền VDDIO của pad | [`hal_i2c_gpio_platform.c`](../../../freertos/cvitek/hal/cv181x/i2c/src/hal_i2c_gpio_platform.c) |
+| **IOBLK Pad SDA (A27)** | `EMMC_DAT3_IOBLK` | `0x03001924` | Xóa `PAD_PD` (`1U << 3`), bật `PAD_PU` (`1U << 2`) theo miền VDDIO của pad | [`hal_i2c_gpio_platform.c`](../../../freertos/cvitek/hal/cv181x/i2c/src/hal_i2c_gpio_platform.c) |
 | **Pinmux SCL (A15)** | `PINMUX_SPK_EN` | `0x0300103C` | Bits `[2:0] = 3` (`SPK_EN__XGPIOA_15`) | [`cv181x_reg_fmux_gpio.h`](../../../freertos/cvitek/hal/cv181x/config/cv181x_reg_fmux_gpio.h) & [`cv181x_pinlist_swconfig.h`](../../../freertos/cvitek/hal/cv181x/config/cv181x_pinlist_swconfig.h) |
 | **Pinmux SDA (A27)** | `PINMUX_EMMC_DAT3` | `0x03001058` | Bits `[2:0] = 3` (`EMMC_DAT3__XGPIOA_27`) | [`cv181x_reg_fmux_gpio.h`](../../../freertos/cvitek/hal/cv181x/config/cv181x_reg_fmux_gpio.h) & [`cv181x_pinlist_swconfig.h`](../../../freertos/cvitek/hal/cv181x/config/cv181x_pinlist_swconfig.h) |
 | **GPIOA Data Latch** | `GPIOA_DR` (`gpio_swporta_dr`) | `0x03020000` | Bit `15` (SCL) & Bit `27` (SDA) luôn giữ bằng `0` | [TRM §21.4 GPIO](../../HW/TRM/TRM_v102.md) |
@@ -84,10 +89,12 @@ flowchart TB
    - Mở clock `0x03002000` bit `29`.
    - Xóa bit `15` và bit `27` trong `GPIOA_DDR` (`0x03020004`) về `0` (chế độ Input Hi-Z).
    - Xóa bit `15` và bit `27` trong `GPIOA_DR` (`0x03020000`) về `0` (nạp sẵn mức thấp vào thanh ghi chốt đầu ra).
+   - Thiết lập điện trở kéo lên nội của pad (`PAD_PU = 1U << 2`, xóa `PAD_PD = 1U << 3`) trên `SPK_EN_IOBLK` (`0x03001908`) và `EMMC_DAT3_IOBLK` (`0x03001924`).
    - Chuyển `FMUX` của `0x0300103C` (`A15`) và `0x03001058` (`A27`) sang Function `3` (`XGPIOA`).
-3. **Đọc Kiểm chứng (`Readback Verification`)**:
-   - Đọc lại cả hai thanh ghi `FMUX` (`0x0300103C` và `0x03001058`) để xác nhận giá trị bằng `3`, đồng thời đọc `GPIOA_DDR` để xác nhận cả hai chân đang ở trạng thái nhả (`(mmio_read_32(GPIOA_DDR) & MASK) == 0`). Nếu bất kỳ điều kiện nào sai, trả về `BB_NOT_READY`.
-   - Đánh dấu `claimed = true` và xuất 4 con trỏ hàm (`drive`, `sample`, `time_us`, `delay_us`) ra cấu trúc `*io`.
+3. **Đọc Kiểm chứng (`Readback Verification`) & Kiểm tra Idle HIGH**:
+   - Đọc lại cả hai thanh ghi `FMUX` (`0x0300103C` và `0x03001058`) để xác nhận giá trị bằng `3`, kiểm tra `GPIOA_DDR` đang nhả (`(mmio_read_32(GPIOA_DDR) & MASK) == 0`), và kiểm tra `SPK_EN_IOBLK` / `EMMC_DAT3_IOBLK` đang bật đúng `PAD_PU`. Nếu sai bất kỳ điều kiện nào, trả ngay `BB_NOT_READY`.
+   - Gọi `delay_us(NULL, 50)` chờ đường dây ổn định rồi đọc `GPIOA_EXT` (`0x03020050`): nếu một trong hai dây vẫn đang `LOW` (`levels != MASK`), in log `[T0-I2C] Idle line LOW: SCL=... SDA=...` và trả về `BB_NOT_READY`.
+   - Chỉ sau khi các kiểm tra trên đạt mới đánh dấu `claimed = true` và xuất 4 con trỏ hàm (`drive`, `sample`, `time_us`, `delay_us`) ra `*io`.
 
 ### 4.2. Nhóm 4 Hàm Hook Phục vụ Tầng 1 (`bb_io_t`)
 
@@ -117,3 +124,11 @@ flowchart TB
 2. **Điện trở kéo lên (Pull-Up) và Mức Điện áp**:
    - Hai chân `A15` (`SCL`) và `A27` (`SDA`) bắt buộc phải có điện trở kéo lên ngoài (thường từ $2.2\ \text{k}\Omega$ đến $4.7\ \text{k}\Omega$).
    - Nếu miền I/O của GPIOA là `3.3V` và mạch giao tiếp cảm biến Tiny1C dùng `1.8V`, bắt buộc phải sử dụng mạch dịch mức hai chiều hỗ trợ Open-Drain (Bidirectional Level Shifter); tuyệt đối không kéo thẳng điện trở `3.3V` vào chân `1.8V` của cảm biến.
+
+## Tiny1C trong pipeline hiện tại
+
+### Đường khởi tạo khi dùng Tiny1C
+
+`THERMAL_START` xác nhận cờ tài nguyên trước khi `data_rw_i2c_hw_init()` gọi `bb_gpio_platform_init()`. I²C5 là ID logic trong driver camera. Hai dây vật lý là GPIOA15 (SPK_EN/SCL) và GPIOA27 (EMMC_DAT3/SDA), không đi qua IP DW I²C. T0 nhả DDR, preload DR bằng 0, bật pull-up pad, đổi mux rồi kiểm tra readback và idle HIGH sau 50 µs. `claimed` chỉ được đặt sau khi các kiểm tra này thành công.
+
+Nếu START trả `-22` và chẩn đoán `BB_NOT_READY`, đọc log `[T0-I2C] Idle line LOW`, kiểm tra chân nào thấp, miền I/O, điện trở kéo và quyền ghi cùng bank GPIOA. Kiểm tra idle trước khi phân tích opcode VDCMD. Bring-up ngày 18/11 thu được dữ liệu ở cấu hình I²C 20 kHz với module và dây nối đã dùng hôm đó. [Nhật ký board](../../Tiny-1C/Implementation/09_board_bringup_2026-11-18.md)

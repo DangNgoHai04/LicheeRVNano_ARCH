@@ -1,7 +1,8 @@
 # Tài liệu Kiến trúc Chốt Tầng 1 (Controller HAL) — Bộ điều khiển Synopsys DW APB SSI trên SOPHGO SG2002
 
-Cập nhật chốt: **09-11-2026**
-Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Bộ điều khiển SPI0 tại MMIO `0x04180000`)**.
+Đối chiếu mã nguồn **25-11-2026**
+Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Bộ điều khiển SPI0 tại MMIO `0x04180000`)**.  
+Tài liệu đi kèm trong repo `freertos`: [`freertos/cvitek/hal/cv181x/spi/README.md`](../../../freertos/cvitek/hal/cv181x/spi/README.md).
 
 ---
 
@@ -61,7 +62,7 @@ Toàn bộ các thanh ghi của khối IP `SPI0` được định nghĩa trong [
 
 ## 3. Cấu trúc Trạng thái Nội bộ `hal_spi_t`
 
-Đối tượng [`hal_spi_t`]( /freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h#L73-L107) được cấp phát tĩnh trong cấu trúc bus của Tầng 2, gồm 3 nhóm thông tin:
+Đối tượng [`hal_spi_t`](../../../freertos/cvitek/hal/cv181x/spi/include/hal_dw_spi.h#L73-L107) được cấp phát tĩnh trong cấu trúc bus của Tầng 2, gồm 3 nhóm thông tin:
 
 1. **Nhóm Cấu hình Phần cứng:**
    - `reg_base`: Địa chỉ thanh ghi cơ sở (`0x04180000`).
@@ -154,8 +155,16 @@ stateDiagram-v2
 
 ## 6. Trạng thái Xác minh Kỹ thuật
 
-1. **Host Unit Tests ([`run.sh`]( /freertos/cvitek/hal/cv181x/spi/tests/run.sh)):**
+1. **Host Unit Tests ([`run.sh`](../../../freertos/cvitek/hal/cv181x/spi/tests/run.sh)):**
    - Đạt **100% PASS** toàn bộ 8 nhóm kịch bản: `POLL`, `IRQ`, `DMA`, `AUTO`, `LSB-first`, `Helpers`, `Recovery`, `Lazy Backend Init`.
 2. **Cross-Compilation RISC-V 64-bit (`riscv64-unknown-elf-gcc`):**
-   - Biên dịch thành công target `halspi` ([`src/hal_dw_spi.c`]( /freertos/cvitek/hal/cv181x/spi/src/hal_dw_spi.c), [`src/hal_spi_platform.c`]( /freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform.c), [`src/hal_spi_platform_io.c`]( /freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform_io.c)) đóng gói vào `libhal.a` với cờ `-Wall -Wextra`, **0 error, 0 warning**.
+   - Biên dịch thành công target `halspi` ([`src/hal_dw_spi.c`](../../../freertos/cvitek/hal/cv181x/spi/src/hal_dw_spi.c), [`src/hal_spi_platform.c`](../../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform.c), [`src/hal_spi_platform_io.c`](../../../freertos/cvitek/hal/cv181x/spi/src/hal_spi_platform_io.c)) đóng gói vào `libhal.a` với cờ `-Wall -Wextra`, **0 error, 0 warning**.
 3. **Kết luận:** Tầng 1 đã đạt trạng thái **Hoàn thiện Chốt** đồng bộ tuyệt đối giữa kiến trúc đặc tả và mã nguồn thực thi.
+
+## Tiny1C trong pipeline hiện tại
+
+### Từ khung SSI đến gói VoSPI
+
+`frame` trong HAL nghĩa là một SPI word. Tiny1C dùng word 8 bit, mode 3, MSB-first, `RX_SAMPLE_DLY=1`. Một gói header VoSPI 512 byte tương ứng 512 SPI word. Một lượt nhận payload 98.304 byte tương ứng 98.304 word và tạo clock bằng `fill_word=0x55`. T1 bảo vệ giới hạn FIFO của SSI và thực thi segment. T3 đọc `frame_valid`, metadata và kiểm tra nội dung.
+
+Với ref clock khai báo 187,5 MHz, bring-up dùng `BAUDR=16` khi stream, tương đương SCK tính toán 11,71875 MHz. Trần 46,875 MHz của HAL là giới hạn cấu hình chung. Host test xác nhận các nhánh polling, IRQ và DMA qua mock. Nhật ký board xác nhận capture Tiny1C ở polling; chất lượng tín hiệu ở các backend/tốc độ khác cần phép đo riêng. [Driver T3](../../../freertos/cvitek/driver/sensor/tiny1C/README.md)

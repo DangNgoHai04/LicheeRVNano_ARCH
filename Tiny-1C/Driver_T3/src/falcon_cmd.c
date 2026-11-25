@@ -372,7 +372,15 @@ ir_error_t pseudo_color_get(enum preview_path path, uint8_t *color_type)
 
 ir_error_t pseudo_color_set(enum preview_path path, enum pseudo_color_types color_type)
 {
-    if ((color_type < PSEUDO_COLOR_MODE_1) || (color_type > PSEUDO_COLOR_MODE_11)) {
+    /*
+     * Theo tài liệu Interface Description1.2.xlsx của hãng cho Tiny1C:
+     * Bảng màu hợp lệ là 1..11 NHƯNG giá trị 2 (PSEUDO_COLOR_MODE_2) là RESERVED
+     * (không tồn tại trên Tiny1C). Chặn ngay tại Tầng 3 để tránh lỗi PARAM_ERR dưới ASIC.
+     */
+    if ((color_type < PSEUDO_COLOR_MODE_1) ||
+        (color_type > PSEUDO_COLOR_MODE_11) ||
+        (color_type == PSEUDO_COLOR_MODE_2)) {
+        printf("[T3-FALCON] Rejecting invalid/reserved pseudo_color_type=%d\n", (int)color_type);
         return IR_ERROR_PARAM;
     }
     uint8_t data = (uint8_t)color_type;
@@ -515,6 +523,18 @@ ir_error_t tpd_get_rect_temp_info(IrRect_t rect_pos, TpdLineRectTempInfo_t *rect
     rect_temp_info->min_temp_point.x         = (uint16_t)(((uint16_t)data[10] << 8U) | data[11]);
     rect_temp_info->min_temp_point.y         = (uint16_t)(((uint16_t)data[12] << 8U) | data[13]);
     return rst;
+}
+
+ir_error_t tpd_set_rect_temp_thd(TpdTempThd_t *rect_temp_thd)
+{
+    (void)rect_temp_thd;
+    /*
+     * Lưu ý theo đánh giá SDK: Bảng Excel Interface Description1.2.xlsx (dòng 28) có liệt kê
+     * tên hàm tpd_set_rect_temp_thd, nhưng mã nguồn phát hành của hãng (falcon_cmd.c/h)
+     * đã lược bỏ không cài đặt hàm này. Trả về IR_UNSUPPORTED_CMD rõ ràng.
+     */
+    printf("[T3-FALCON] Info: tpd_set_rect_temp_thd is omitted in Vendor SDK V1.0.0 -> IR_UNSUPPORTED_CMD\n");
+    return IR_UNSUPPORTED_CMD;
 }
 
 ir_error_t zoom_center_up(enum preview_path path, enum zoom_scale_step scale_step)

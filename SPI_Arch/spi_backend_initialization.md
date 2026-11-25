@@ -101,3 +101,7 @@ Public struct và hook signature đã đổi: rebuild mọi caller, dùng initia
 ## 6. Phạm vi kiểm tra
 
 Host tests dùng mock T0 kiểm hành vi T1/T2 và fault injection init. Source T0/T1 và T2 được cross-compile qua target `halspi` và `spi`. Đây không phải kiểm chứng MMIO trên board. Sai lệch clock/reset/pinmux, timeout/cache/abort còn lại nằm trong các tài liệu review T0/T1.
+
+## Cấu hình Tiny1C
+
+Adapter Tiny1C chọn POLL mặc định. Khi START đầu tiên khởi tạo SPI với bit 17 đã xác nhận, adapter bật quyền IRQ/DMA và chọn AUTO. Khi dùng ngưỡng mặc định, cả segment header 512 word và payload 98.304 word đều đủ ngưỡng DMA. Việc thay cờ trên một kết nối mới không cấu hình lại SPI đã khởi tạo trong firmware. Bring-up ngày 18/11 chạy polling. [Driver T3](../../freertos/cvitek/driver/sensor/tiny1C/README.md) · [README SPI0 T2](../../freertos/cvitek/driver/spi/README.md) · [T2 SPI](T2_layer_arch/spi_t2_driver_architecture.md)

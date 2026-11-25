@@ -1,0 +1,302 @@
+<mxfile host="65bd71144e">
+    <diagram id="page-1" name="3.1. Sơ đồ kiến trúc tổng thể từ Tầng 0 đến Tầng App">
+        <mxGraphModel dx="1442" dy="871" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" parent="1" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;text;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;align=left;" value="3.1. Sơ đồ kiến trúc tổng thể từ Tầng 0 đến Tầng App" vertex="1">
+                    <mxGeometry height="45" width="1050" x="30" y="10" as="geometry"/>
+                </mxCell>
+                <mxCell id="PC" parent="1" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#dae8fc;swimlaneFillColor=#fafafa;strokeColor=#6c8ebf;fontStyle=1;" value="MIEN 4: HOST PC (Ubuntu / Client)" vertex="1">
+                    <mxGeometry height="410" width="440" x="30" y="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="WEB" parent="PC" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Trinh duyet Web (http://127.0.0.1:8080) hoac Terminal CLI / Tkinter" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="VIEWER" parent="PC" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="App Viewer: thermal_viewer.py (CameraWorker auto-reconnect, giai ma Y16/YUYV -&gt; BMP, HTTP Server)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="LINUX" parent="1" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#dae8fc;swimlaneFillColor=#fafafa;strokeColor=#6c8ebf;fontStyle=1;" value="MIEN 3: NHAN CHINH C906B - LINUX 5.10 (boot.sd FIT Image, spi0 = disabled)" vertex="1">
+                    <mxGeometry height="410" width="850" x="30" y="650" as="geometry"/>
+                </mxCell>
+                <mxCell id="L_APP" parent="LINUX" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="App Linux User-Space: /root/thermal_bridge (flock owner lock, TCP Server 0.0.0.0:9000, mmap /dev/mem)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="L_KO" parent="LINUX" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Kernel Driver: soph_rtos_cmdqu.ko (/dev/cvi-rtos-cmdqu, rtos_cmdqu_send_wait poll 5ms)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="L_MEM" parent="LINUX" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="/dev/mem -&gt; Anh xa RTOS Reserved RAM (0x8FE00000 .. 0x8FFFFFFF)" vertex="1">
+                    <mxGeometry height="90" width="340" x="440" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="RTOS" parent="1" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#dae8fc;swimlaneFillColor=#fafafa;strokeColor=#6c8ebf;fontStyle=1;" value="MIEN 2: NHAN PHU C906L - FREERTOS (fip.bin -&gt; cvirtos.bin @ 0x8FE00000)" vertex="1">
+                    <mxGeometry height="2210" width="950" x="30" y="1170" as="geometry"/>
+                </mxCell>
+                <mxCell id="APP_RTOS" parent="RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#d5e8d4;swimlaneFillColor=#fafafa;strokeColor=#82b366;fontStyle=1;" value="Tang App RTOS" vertex="1">
+                    <mxGeometry height="410" width="440" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="COMM" parent="APP_RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="comm_main.c: prvCmdQuRunTask + comm_poll_mailbox()" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="THM_SVC" parent="APP_RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="thermal_service.c: thermal_service_task (Dieu phoi START/CAPTURE/STOP/FFC/INFO + Buffer reply)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="T3" parent="RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#d5e8d4;swimlaneFillColor=#fafafa;strokeColor=#82b366;fontStyle=1;" value="Tang 3: Camera Driver (Doc_md/Tiny-1C/Driver_T3)" vertex="1">
+                    <mxGeometry height="610" width="850" x="30" y="590" as="geometry"/>
+                </mxCell>
+                <mxCell id="CORE" parent="T3" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="core.c (core_init, core_start, core_stop, trigger_shutter, probe)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="FALCON" parent="T3" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="falcon_cmd.c + vdcmd.c (Tap lenh ASIC-2121W, Mutex tinh, Short/Std/Long Cmd)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="DATARW" parent="T3" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="data_rw.c (I2C Reg16, poll 0x0200, rdtime 25MHz, diag)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="470" as="geometry"/>
+                </mxCell>
+                <mxCell id="VOSPI" parent="T3" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="vospi.c + hal_spi.c (512B Header scan 64..480, chong 0xFF, 96KB/192KB Payload)" vertex="1">
+                    <mxGeometry height="90" width="340" x="440" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="T2" parent="RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#d5e8d4;swimlaneFillColor=#fafafa;strokeColor=#82b366;fontStyle=1;" value="Tang 2: Driver Core (freertos/cvitek/driver)" vertex="1">
+                    <mxGeometry height="210" width="850" x="30" y="1310" as="geometry"/>
+                </mxCell>
+                <mxCell id="S_I2C" parent="T2" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="soft_i2c.c (soft_i2c_init, read_reg16, write_reg16, recover, Mutex)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="S_SPI" parent="T2" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="spi.c (spi_bus_init, spi_transfer_one, chon POLL/IRQ/DMA, Mutex)" vertex="1">
+                    <mxGeometry height="90" width="340" x="440" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="T1" parent="RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#d5e8d4;swimlaneFillColor=#fafafa;strokeColor=#82b366;fontStyle=1;" value="Tang 1: HAL Core (freertos/cvitek/hal/cv181x)" vertex="1">
+                    <mxGeometry height="210" width="850" x="30" y="1630" as="geometry"/>
+                </mxCell>
+                <mxCell id="H_I2C" parent="T1" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="hal_i2c_bitbang.c (May trang thai I2C bit-bang, clock stretching, nack_phase)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="H_SPI" parent="T1" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="hal_dw_spi.c (Dieu khien thanh ghi DW_apb_ssi: CTRLR0=0xC7, BAUDR=16, FIFO poll/IRQ/DMA)" vertex="1">
+                    <mxGeometry height="90" width="340" x="440" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="T0" parent="RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#d5e8d4;swimlaneFillColor=#fafafa;strokeColor=#82b366;fontStyle=1;" value="Tang 0: Platform &amp; MMIO (freertos/cvitek/hal/cv181x)" vertex="1">
+                    <mxGeometry height="210" width="850" x="30" y="1950" as="geometry"/>
+                </mxCell>
+                <mxCell id="P_I2C" parent="T0" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="hal_i2c_gpio_platform.c (GPIOA15/A27 open-drain, IOBLK 0x03001908/1924 = 0x44 PU)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="P_SPI" parent="T0" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="hal_spi_platform_io.c + hal_spi_platform.c (CLK/RST SPI0, mo khoa DSI D-PHY 0x0A0D1000, Pinmux FPC2, CS GPIOC17)" vertex="1">
+                    <mxGeometry height="90" width="340" x="440" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="HW" parent="1" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#dae8fc;swimlaneFillColor=#fafafa;strokeColor=#6c8ebf;fontStyle=1;" value="MIEN 1: PHAN CUNG VAT LY (SG2002 &lt;-&gt; Tiny1C ASIC-2121W)" vertex="1">
+                    <mxGeometry height="410" width="850" x="30" y="3490" as="geometry"/>
+                </mxCell>
+                <mxCell id="HW_I2C" parent="HW" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Bus I2C5 (3.3V, 20 kHz): GPIOA15 (SCL) + GPIOA27 (SDA) -&gt; Slave 0x3C" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="HW_SPI" parent="HW" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Bus SPI0 VoSPI (FPC2 1.8V, 11.71875 MHz, Mode 3): FPC2.15 SCK, FPC2.14 CS, FPC2.18 MOSI, FPC2.17 MISO" vertex="1">
+                    <mxGeometry height="90" width="340" x="440" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="TINY1C" parent="HW" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Module InfiRay Tiny1C (Cam bien nhiet 256x192 + ISP ASIC-2121W + Man trap FFC)" vertex="1">
+                    <mxGeometry height="90" width="340" x="30" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge0" edge="1" parent="1" source="WEB" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;" target="VIEWER" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge1" edge="1" parent="1" source="L_APP" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;" target="L_KO" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge2" edge="1" parent="1" source="L_APP" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;" target="L_MEM" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge3" edge="1" parent="1" source="COMM" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;" target="THM_SVC" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge4" edge="1" parent="1" source="CORE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="FALCON" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge5" edge="1" parent="1" source="FALCON" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="DATARW" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge6" edge="1" parent="1" source="CORE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="VOSPI" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge7" edge="1" parent="1" source="THM_SVC" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="CORE" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge8" edge="1" parent="1" source="THM_SVC" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="VOSPI" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge9" edge="1" parent="1" source="DATARW" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="S_I2C" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge10" edge="1" parent="1" source="S_I2C" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="H_I2C" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge11" edge="1" parent="1" source="H_I2C" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="P_I2C" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge12" edge="1" parent="1" source="VOSPI" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="S_SPI" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge13" edge="1" parent="1" source="S_SPI" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="H_SPI" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge14" edge="1" parent="1" source="H_SPI" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" target="P_SPI" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge15" edge="1" parent="1" source="HW_I2C" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;" target="TINY1C" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge16" edge="1" parent="1" source="HW_SPI" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;" target="TINY1C" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge17" edge="1" parent="1" source="VIEWER" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;strokeWidth=3;" target="L_APP" value="TCP :9000 qua USB Ethernet 10.250.50.1 (0.57ms) hoac Wi-Fi">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge18" edge="1" parent="1" source="L_KO" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;strokeWidth=3;" target="COMM" value="Hardware Mailbox SG2002">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge19" edge="1" parent="1" source="L_MEM" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;dashed=1;endArrow=none;" target="THM_SVC" value="Zero-copy Shared RAM 0x8FE00000">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge20" edge="1" parent="1" source="P_I2C" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;strokeWidth=3;" target="HW_I2C" value="MMIO GPIOA 0x03020000">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="edge21" edge="1" parent="1" source="P_SPI" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;startArrow=block;startFill=1;strokeWidth=3;" target="HW_SPI" value="MMIO SPI0 0x04180000 + GPIOC 0x03022000">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="page-2" name="3.3. Sơ đồ đóng gói Artifact triển khai lên thẻ nhớ SD">
+        <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="3.3. Sơ đồ đóng gói Artifact triển khai lên thẻ nhớ SD" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;text;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;align=left;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="30" y="10" width="1930" height="45"/>
+                </mxCell>
+                <mxCell id="BUILD_RTOS" value="1. Build FreeRTOS + Driver T3 + App RTOS" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#dae8fc;swimlaneFillColor=#fafafa;strokeColor=#6c8ebf;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="70" y="90" width="1810" height="190"/>
+                </mxCell>
+                <mxCell id="B1" value="build_firmware.sh (THERMAL_I2C_FREQ_HZ=20000)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_RTOS" vertex="1">
+                    <mxGeometry as="geometry" x="70" y="30" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="B2" value="cvirtos.bin (C906L @ 0x8FE00000)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_RTOS" vertex="1">
+                    <mxGeometry as="geometry" x="520" y="30" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="B3" value="package_fip.py (--base fip.bin.bak)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_RTOS" vertex="1">
+                    <mxGeometry as="geometry" x="970" y="30" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="FIP" value="/boot/fip.bin (BL2 + DDR + OpenSBI + U-Boot + cvirtos.bin)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_RTOS" vertex="1">
+                    <mxGeometry as="geometry" x="1420" y="30" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="BUILD_LINUX" value="2. Build Linux Kernel + DTS + Mailbox + Bridge" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;swimlane;horizontal=1;startSize=45;rounded=1;fillColor=#dae8fc;swimlaneFillColor=#fafafa;strokeColor=#6c8ebf;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="70" y="350" width="1360" height="510"/>
+                </mxCell>
+                <mxCell id="L1" value="build_kernel (sg2002_licheervnano_sd.dts: spi0=disabled)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_LINUX" vertex="1">
+                    <mxGeometry as="geometry" x="70" y="30" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="L2" value="rawimages/boot.sd (FIT Image boot.itb, KHONG qua raw2cimg)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_LINUX" vertex="1">
+                    <mxGeometry as="geometry" x="520" y="30" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="BOOTSD" value="/boot/boot.sd tren the SD" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_LINUX" vertex="1">
+                    <mxGeometry as="geometry" x="970" y="30" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="L3" value="build_mailbox.sh" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_LINUX" vertex="1">
+                    <mxGeometry as="geometry" x="70" y="190" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="KO_OUT" value="/mnt/system/ko/soph_rtos_cmdqu.ko" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_LINUX" vertex="1">
+                    <mxGeometry as="geometry" x="520" y="190" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="L4" value="make -C Doc_md/Tiny-1C/App linux" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_LINUX" vertex="1">
+                    <mxGeometry as="geometry" x="70" y="350" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="BR_OUT" value="/root/thermal_bridge (static musl riscv64)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="BUILD_LINUX" vertex="1">
+                    <mxGeometry as="geometry" x="520" y="350" width="340" height="90"/>
+                </mxCell>
+                <mxCell id="edge0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" parent="1" edge="1" source="B1" target="B2">
+                    <mxGeometry as="geometry" relative="1"/>
+                </mxCell>
+                <mxCell id="edge1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" parent="1" edge="1" source="B2" target="B3">
+                    <mxGeometry as="geometry" relative="1"/>
+                </mxCell>
+                <mxCell id="edge2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" parent="1" edge="1" source="B3" target="FIP">
+                    <mxGeometry as="geometry" relative="1"/>
+                </mxCell>
+                <mxCell id="edge3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" parent="1" edge="1" source="L1" target="L2">
+                    <mxGeometry as="geometry" relative="1"/>
+                </mxCell>
+                <mxCell id="edge4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" parent="1" edge="1" source="L2" target="BOOTSD">
+                    <mxGeometry as="geometry" relative="1"/>
+                </mxCell>
+                <mxCell id="edge5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" parent="1" edge="1" source="L3" target="KO_OUT">
+                    <mxGeometry as="geometry" relative="1"/>
+                </mxCell>
+                <mxCell id="edge6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;fontSize=12;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;" parent="1" edge="1" source="L4" target="BR_OUT">
+                    <mxGeometry as="geometry" relative="1"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="page-3" name="3.2. Phân chia tài nguyên phần cứng giữa 2 nhân (Resource Ownership)">
+        <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="3.2. Phân chia tài nguyên phần cứng giữa 2 nhân (Resource Ownership)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;text;strokeColor=none;fillColor=none;fontSize=22;fontStyle=1;align=left;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="20" y="10" width="1270" height="65"/>
+                </mxCell>
+                <mxCell id="r0c0" value="Tài nguyên phần cứng" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#dae8fc;strokeColor=#b8c4d1;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="20" y="95" width="220" height="65"/>
+                </mxCell>
+                <mxCell id="r0c1" value="Chủ sở hữu" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#dae8fc;strokeColor=#b8c4d1;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="240" y="95" width="350" height="65"/>
+                </mxCell>
+                <mxCell id="r0c2" value="Cấu hình cô lập &amp; ghi chú" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#dae8fc;strokeColor=#b8c4d1;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="590" y="95" width="700" height="65"/>
+                </mxCell>
+                <mxCell id="r1c0" value="SPI0 (0x04180000) &amp; PAD_MIPI_TX* (FPC2 14/15/17/18)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="20" y="160" width="220" height="87"/>
+                </mxCell>
+                <mxCell id="r1c1" value="FreeRTOS C906L" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="240" y="160" width="350" height="87"/>
+                </mxCell>
+                <mxCell id="r1c2" value="Linux DTS đặt &amp;spi0 { status = &quot;disabled&quot;; }; (nạp qua rawimages/boot.sd FIT Image). RTOS mở khóa MIPI DSI D-PHY Bypass (0x0A0D1000), mux SPI0 (Func 6) và GPIOC17 CS (Func 3)." style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="590" y="160" width="700" height="87"/>
+                </mxCell>
+                <mxCell id="r2c0" value="I2C5 (GPIOA15 SCL, GPIOA27 SDA)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#ffffff;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="20" y="247" width="220" height="66"/>
+                </mxCell>
+                <mxCell id="r2c1" value="FreeRTOS C906L" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#ffffff;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="240" y="247" width="350" height="66"/>
+                </mxCell>
+                <mxCell id="r2c2" value="Linux tắt i2c5. T0 Soft-I2C chỉ khởi tạo khi thermal_bridge xác nhận cờ --resources-owned (THERMAL_GPIO_OWNED); bật pull-up nội (0x44) và giữ kiểu open-drain." style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#ffffff;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="590" y="247" width="700" height="66"/>
+                </mxCell>
+                <mxCell id="r3c0" value="RTOS Reserved RAM (0x8FE00000..0x8FFFFFFF)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="20" y="313" width="220" height="87"/>
+                </mxCell>
+                <mxCell id="r3c1" value="C906L ghi / C906B đọc" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="240" y="313" width="350" height="87"/>
+                </mxCell>
+                <mxCell id="r3c2" value="C906L chứa firmware cvirtos.bin + buffer reply (tối đa 64 + 196,608 B) và flush_dcache_range trước khi trả Mailbox. C906B Linux chỉ đọc qua mmap(/dev/mem) sau khi nhận phản hồi Mailbox." style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="590" y="313" width="700" height="87"/>
+                </mxCell>
+                <mxCell id="r4c0" value="Hardware Mailbox (rtos_cmdqu)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#ffffff;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="20" y="400" width="220" height="66"/>
+                </mxCell>
+                <mxCell id="r4c1" value="Dùng chung 2 nhân" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#ffffff;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="240" y="400" width="350" height="66"/>
+                </mxCell>
+                <mxCell id="r4c2" value="Kênh THERMAL_IP: Linux gọi rtos_cmdqu_send_wait (polling 5 ms), RTOS gọi comm_poll_mailbox() trong prvCmdQuRunTask (không sửa nhân freertos/Source/...)." style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#ffffff;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="590" y="400" width="700" height="66"/>
+                </mxCell>
+                <mxCell id="r5c0" value="Mạng USB Ethernet (usb0 = 10.250.50.1) / Wi-Fi (wlan0)" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="20" y="466" width="220" height="87"/>
+                </mxCell>
+                <mxCell id="r5c1" value="Linux C906B" style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="240" y="466" width="350" height="87"/>
+                </mxCell>
+                <mxCell id="r5c2" value="Phục vụ SSH và TCP :9000 của thermal_bridge truyền gói dữ liệu sang Host PC." style="whiteSpace=wrap;html=0;fontSize=14;spacing=10;align=left;fillColor=#f5f7fa;strokeColor=#b8c4d1;" parent="1" vertex="1">
+                    <mxGeometry as="geometry" x="590" y="466" width="700" height="87"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

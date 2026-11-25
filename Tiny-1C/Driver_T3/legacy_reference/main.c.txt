@@ -1,0 +1,282 @@
+/*
+ * Tầng 3 (T3 - Tiny1C Application Task): Tiến trình thời gian thực thu nhận
+ * khung hình nhiệt VoSPI và xử lý lệnh điều khiển I2C5 trên nhân RTOS (C906_1).
+ */
+
+#include "core.h"
+#include "vospi.h"
+#include "ipc.h"
+#include "data_rw.h"
+#include <stdio.h>
+#include <string.h>
+
+#if defined(__riscv) && defined(__has_include) && __has_include("FreeRTOS.h")
+#define THERMAL_HAS_FREERTOS_HDR 1
+#include "FreeRTOS.h"
+#include "task.h"
+#else
+static inline void vTaskDelay(uint32_t ticks)
+{
+    (void)ticks;
+}
+#define pdMS_TO_TICKS(ms) (ms)
+#define configMAX_PRIORITIES (5)
+#endif
+
+#ifndef THERMAL_I2C_BUS_DEFAULT
+/* Mặc định dùng Bus 5 (Soft-I2C Tầng 2 trên GPIOA15 SCL / GPIOA27 SDA) */
+#define THERMAL_I2C_BUS_DEFAULT     (5U)
+#endif
+
+#define THERMAL_TASK_STACK_SIZE     (4096U)
+#define THERMAL_TASK_PRIORITY       (configMAX_PRIORITIES - 2)
+
+/*
+ * Bộ đệm khung hình đôi (Ping-Pong Double Buffering: 2 x 192 KB) căn chỉnh 64-byte Cache Line C906:
+ * Đảm bảo trong khi nhân Linux đang đọc khung N tại shared->raw_frame_addr,
+ * nhân RTOS DMA sẽ ghi khung N+1 vào bộ đệm còn lại, chống xé hình (tearing).
+ */
+static uint8_t s_frame_buffers[2][DUAL_FRAME_BYTES] __attribute__((aligned(64)));
+static uint32_t s_pingpong_idx = 0U;
+
+void thermal_camera_task(void *pvParameters)
+{
+    (void)pvParameters;
+    printf("=== Thermal Camera Tiny1C T3 Driver Task (T2 SPI0 + T2 Soft-I2C5) ===\n");
+
+    /* 1. Khởi tạo Shared RAM cho cầu nối IPC giữa RTOS và CPU chính */
+    (void)ipc_init(SHARED_MEM_BASE);
+    shared_data_t *shared = ipc_get_shared_data();
+
+    /* 2. Khởi tạo điều khiển I2C5 qua Tầng 2 (soft_i2c_init, Slave 7-bit 0x3C) */
+    if (core_init(THERMAL_I2C_BUS_DEFAULT, I2C_SLAVE_ID) != IR_SUCCESS) {
+        printf("[Bridge] Error: Failed to initialize Thermal Sensor Soft-I2C5!\n");
+    }
+
+    /* 3. Khởi tạo kênh truyền dữ liệu VoSPI qua Tầng 2 (spi_bus_init + spi_device_init) */
+    if (spi_stream_init(0U, SPI0_DSI_CS_PIN_DEFAULT) != 0) {
+        printf("[Bridge] Error: Failed to initialize SPI0 stream!\n");
+    }
+
+    /* 4. Kích hoạt camera ở chế độ ma trận nhiệt độ RAW16 @ 25 FPS */
+    if (core_start(MODE_TEMP, 25U) != IR_SUCCESS) {
+        printf("[Bridge] Error: Failed to start Thermal Camera preview!\n");
+    }
+
+    /* 5. Bật bảo vệ màn trập tự động khi rơi (Fall Protection) */
+    (void)core_set_fall_protection(true, 1000U, 1000U);
+
+    uint32_t frame_count = 0U;
+
+    for (;;) {
+        /* A. Xử lý các mệnh lệnh điều khiển do CPU chính gửi xuống qua Mailbox IPC */
+        ipc_process_linux_cmds();
+
+        /* B. Xác định chế độ hiện tại và kích thước Frame cần thu nhận qua VoSPI */
+        camera_mode_t cur_mode = core_get_mode();
+        /*
+         * Lưu ý quan trọng theo SDK gốc của hãng (Tiny1C_STM32_SPI_SDK/USER/main.c:106-113):
+         * Cả image_frame_get() (MODE_IMAGE) và temp_frame_get() (MODE_TEMP sau khi gọi
+         * y16_preview_start) đều gửi byte lệnh 0xAA (VOSPI_HEADER_IMAGE)!
+         * Mã lệnh 0xCC (VOSPI_HEADER_TEMP) chỉ được spi_get_frame() gửi ở nửa sau của MODE_DUAL.
+         */
+        uint8_t vospi_hdr      = VOSPI_HEADER_IMAGE;
+        uint32_t target_bytes  = (cur_mode == MODE_DUAL) ? DUAL_FRAME_BYTES : FRAME_BYTES;
+        uint16_t target_height = (cur_mode == MODE_DUAL) ? DUAL_HEIGHT : IMG_H;
+        uint8_t *write_buf     = s_frame_buffers[s_pingpong_idx];
+
+        /* C. Thu nhận 1 Frame từ camera qua Tầng 2 SPI0 (DMA 4KB auto-chunking) */
+        int ret = spi_get_frame(write_buf, target_bytes, vospi_hdr);
+        if (ret == 0) {
+            frame_count++;
+
+#if defined(THERMAL_HAS_FREERTOS_HDR)
+            uint32_t current_ms = (uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS;
+#else
+            uint32_t current_ms = frame_count * 40U;
+#endif
+
+            const vospi_frame_header_t *hdr = spi_get_last_header();
+            if (shared != NULL) {
+                shared->raw_frame_addr = (uint32_t)(uintptr_t)write_buf;
+                shared->frame_bytes    = target_bytes;
+                shared->frame_seq      = frame_count;
+                shared->timestamp_ms   = current_ms;
+                shared->frame_width    = IMG_W;
+                shared->frame_height   = target_height;
+                shared->frame_mode     = (uint8_t)cur_mode;
+                if (hdr != NULL) {
+                    memcpy((void *)&shared->vospi_hdr, hdr, sizeof(vospi_frame_header_t));
+                    shared->sensor_vtemp = hdr->vtemp;
+                }
+            }
+
+            /* Đảo sang bộ đệm Ping-Pong còn lại cho khung kế tiếp */
+            s_pingpong_idx ^= 1U;
+
+            if ((frame_count % 50U) == 0U) {
+                extremes_t ext;
+                if (query_extremes(&ext) == IR_SUCCESS) {
+                    if (shared != NULL) {
+                        memcpy((void *)&shared->extremes, &ext, sizeof(extremes_t));
+                    }
+                }
+            }
+
+            (void)ipc_notify_frame_ready();
+
+            if ((frame_count % 1500U) == 0U) {
+                (void)trigger_shutter();
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(1U));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(5U));
+        }
+
+#if !defined(__riscv)
+        if (frame_count >= 2U) {
+            break;
+        }
+#endif
+    }
+}
+
+void select_output_mode(camera_mode_t mode)
+{
+    if ((mode == MODE_IMAGE) || (mode == MODE_TEMP) || (mode == MODE_DUAL)) {
+        (void)core_start(mode, 25U);
+    }
+}
+
+void start_thermal_camera_task(void)
+{
+#if defined(THERMAL_HAS_FREERTOS_HDR)
+    (void)xTaskCreate(thermal_camera_task, "thermal_task",
+                      THERMAL_TASK_STACK_SIZE, NULL,
+                      THERMAL_TASK_PRIORITY, NULL);
+#else
+    thermal_camera_task(NULL);
+#endif
+}
+
+int thermal_app_main(void)
+{
+    start_thermal_camera_task();
+    return 0;
+}
+
+#if !defined(__riscv)
+int main(void)
+{
+    int failures = 0;
+
+    printf("======================================================================\n");
+    printf("   KIEM THU TOAN DIEN TANG 3 (T3) DRIVER CAMERA NHIET TINY1C\n");
+    printf("   (Dong bo T0-T2 SG2002 SPI0/Soft-I2C & Vendor SDK V1.0.0)\n");
+    printf("======================================================================\n\n");
+
+    /* 1. Chạy thử vòng lặp Task chính (Khởi tạo IPC, Soft-I2C5, SPI0, Probe Device Info, Thu 2 khung MODE_TEMP) */
+    printf("--- [BUOC 1] Khoi chay thermal_camera_task() & Ping-Pong Buffering ---\n");
+    (void)thermal_app_main();
+    shared_data_t *shared = ipc_get_shared_data();
+    if ((shared == NULL) || (shared->frame_seq < 2U) || (shared->frame_bytes != FRAME_BYTES)) {
+        printf("[FAIL] thermal_camera_task() thu khung MODE_TEMP that bai!\n");
+        failures++;
+    } else {
+        printf("[PASS] Da thu %u khung MODE_TEMP (96 KB/khung, Vtemp=%u, SCK=%u Hz)\n\n",
+               (unsigned int)shared->frame_seq,
+               (unsigned int)shared->sensor_vtemp,
+               (unsigned int)hal_spi_get_freq_hz());
+    }
+
+    /* 2. Kiểm thử chuyển từ MODE_TEMP sang MODE_DUAL (tự động gọi y16_preview_stop & đổi SCK lên 46.875 MHz) */
+    printf("--- [BUOC 2] Chuyen MODE_TEMP -> MODE_DUAL (256x384, SCK=46.875 MHz) ---\n");
+    select_output_mode(MODE_DUAL);
+    int dual_rc = spi_get_frame(s_frame_buffers[0], DUAL_FRAME_BYTES, VOSPI_HEADER_IMAGE);
+    const vospi_frame_header_t *img_hdr  = spi_get_last_header();
+    const vospi_frame_header_t *temp_hdr = spi_get_last_temp_header();
+    if ((dual_rc != 0) || (hal_spi_get_freq_hz() != THERMAL_SPI_DUAL_SCK_HZ)) {
+        printf("[FAIL] Chuyen sang MODE_DUAL hoac thu khung kep 192 KB that bai!\n");
+        failures++;
+    } else {
+        printf("[PASS] Thu khung kep MODE_DUAL (196,608 bytes) thanh cong @ SCK=%u Hz\n",
+               (unsigned int)hal_spi_get_freq_hz());
+        printf("       + Image Plane Header (0xAA): valid=%u, frame_index=%u\n",
+               (unsigned int)img_hdr->frame_valid, (unsigned int)img_hdr->frame_index);
+        printf("       + Temp  Plane Header (0xCC): valid=%u, frame_index=%u\n\n",
+               (unsigned int)temp_hdr->frame_valid, (unsigned int)temp_hdr->frame_index);
+    }
+
+    /* 3. Kiểm thử Bảng màu giả (Palette) & chặn PSEUDO_COLOR_MODE_2 (Reserved trên Tiny1C) */
+    printf("--- [BUOC 3] Kiem thu Bang mau gia (Palette) & chan PSEUDO_COLOR_MODE_2 ---\n");
+    ir_error_t pal_ok  = set_palette((uint8_t)PSEUDO_COLOR_MODE_3);
+    ir_error_t pal_bad = set_palette((uint8_t)PSEUDO_COLOR_MODE_2);
+    uint8_t cur_pal    = 0U;
+    (void)get_palette(&cur_pal);
+    if ((pal_ok != IR_SUCCESS) || (pal_bad == IR_SUCCESS) || (cur_pal != (uint8_t)PSEUDO_COLOR_MODE_3)) {
+        printf("[FAIL] Kiem tra Palette that bai (pal_ok=%d, pal_bad=%d, cur_pal=%u)\n",
+               (int)pal_ok, (int)pal_bad, (unsigned int)cur_pal);
+        failures++;
+    } else {
+        printf("[PASS] Set Palette 3 (Ironbow) OK, tu choi Palette 2 (Reserved) OK!\n\n");
+    }
+
+    /* 4. Kiểm thử Cấu hình tham số môi trường (EMS, TAU, TU, TA) & Truy vấn nhiệt độ TPD */
+    printf("--- [BUOC 4] Kiem thu Tham so moi truong & Do nhiet do (Extremes/Point/Rect) ---\n");
+    ir_error_t env_rc = core_set_env_params(0.95f, 1.5f, 25.0f, 26.0f, 0.98f);
+    extremes_t ext    = { 0 };
+    float pt_temp     = 0.0f;
+    region_temp_t roi = { 0 };
+    ir_error_t ext_rc = query_extremes(&ext);
+    ir_error_t pt_rc  = query_point_temp(128U, 96U, &pt_temp);
+    ir_error_t roi_rc = query_rect_temp(20U, 20U, 180U, 140U, &roi);
+    if ((env_rc != IR_SUCCESS) || (ext_rc != IR_SUCCESS) || (pt_rc != IR_SUCCESS) || (roi_rc != IR_SUCCESS)) {
+        printf("[FAIL] Do nhiet do TPD that bai!\n");
+        failures++;
+    } else {
+        printf("[PASS] Tham so moi truong & Do nhiet do TPD (0-based coords) thanh cong:\n");
+        printf("       + Scene Extremes : Max=%.2f C @(%u,%u), Min=%.2f C @(%u,%u)\n",
+               ext.max_temp, (unsigned int)ext.max_x, (unsigned int)ext.max_y,
+               ext.min_temp, (unsigned int)ext.min_x, (unsigned int)ext.min_y);
+        printf("       + Center (128,96): %.2f C\n", pt_temp);
+        printf("       + ROI [20..180]  : Avg=%.2f C, Max=%.2f C @(%u,%u), Min=%.2f C @(%u,%u)\n\n",
+               roi.avg_temp, roi.max_temp, (unsigned int)roi.max_x, (unsigned int)roi.max_y,
+               roi.min_temp, (unsigned int)roi.min_x, (unsigned int)roi.min_y);
+    }
+
+    /* 5. Kiểm thử phân mảnh gói ghi dài (Multi-chunk 64B HLD 0x9D00 -> RW 0x1D00) & Thống kê VoSPI */
+    printf("--- [BUOC 5] Kiem thu Multi-Chunk SPI Flash Write (0x9D00 -> 0x1D00) & Thong ke VoSPI ---\n");
+    uint8_t flash_page[200];
+    memset(flash_page, 0xA5, sizeof(flash_page));
+    ir_error_t fw_rc  = falcon_spi_write(0x00010000U, (uint16_t)sizeof(flash_page), flash_page);
+    ir_error_t thd_rc = tpd_set_rect_temp_thd(NULL);
+    vospi_stats_t vstats;
+    spi_get_vospi_stats(&vstats);
+
+    if ((fw_rc != IR_SUCCESS) || (thd_rc != IR_UNSUPPORTED_CMD) || (vstats.frames_ok < 4U)) {
+        printf("[FAIL] Multi-chunk write hoac VoSPI stats that bai!\n");
+        failures++;
+    } else {
+        printf("[PASS] Ghi phan manh 200 bytes qua HLD 0x9D00 -> RW 0x1D00 thanh cong!\n");
+        printf("[PASS] Thong ke VoSPI: frames_ok=%u, invalid=%u, hdr_err=%u, payload_err=%u, drops=%u\n\n",
+               (unsigned int)vstats.frames_ok,
+               (unsigned int)vstats.frames_invalid,
+               (unsigned int)vstats.header_err,
+               (unsigned int)vstats.payload_err,
+               (unsigned int)vstats.frame_drops);
+    }
+
+    (void)core_stop();
+
+    printf("======================================================================\n");
+    if (failures == 0) {
+        printf("   KET QUA CUOI CUNG: TAT CA CAC BAI KIEM THU TANG 3 DEU PASS!\n");
+    } else {
+        printf("   KET QUA CUOI CUNG: CO %d BAI KIEM THU THAT BAI!\n", failures);
+    }
+    printf("======================================================================\n");
+
+    return (failures == 0) ? 0 : 1;
+}
+#endif

@@ -8,10 +8,13 @@
 #include "data_rw.h"
 #include "vdcmd.h"
 #include "falcon_cmd.h"
+#include "hal_spi.h"
 #include <stdio.h>
+#include <string.h>
 
 static camera_mode_t s_current_mode = MODE_TEMP;
 static bool s_is_started = false;
+static tiny1c_device_info_t s_dev_info = { 0 };
 
 /*
  * Chuẩn hóa tọa độ giữa hệ 0-based của ứng dụng (0..IMG_W-1, 0..IMG_H-1)
@@ -40,8 +43,99 @@ static inline uint16_t from_asic_coord(uint16_t asic_val, uint16_t max_dim)
  * 1. ĐIỀU KHIỂN VÒNG ĐỜI CAMERA & MÀN TRẬP (PREVIEW & SHUTTER / FFC)
  * ========================================================================= */
 
+static void copy_dev_info_str(char *dst, size_t dst_size, const uint8_t *src)
+{
+    if ((dst == NULL) || (dst_size == 0U) || (src == NULL)) {
+        return;
+    }
+    memcpy(dst, src, dst_size - 1U);
+    dst[dst_size - 1U] = '\0';
+}
+
+ir_error_t core_probe_device_info(tiny1c_device_info_t *out_info)
+{
+    uint8_t raw[64];
+    memset(&s_dev_info, 0, sizeof(s_dev_info));
+
+    memset(raw, 0, sizeof(raw));
+    if (get_device_info(DEV_INFO_CHIP_ID, raw) == IR_SUCCESS) {
+        data_rw_mark_probe_ok(0U);
+        copy_dev_info_str(s_dev_info.project_info, sizeof(s_dev_info.project_info), raw);
+    }
+
+    data_rw_set_probe_stage(1U);
+    memset(raw, 0, sizeof(raw));
+    ir_error_t probe_status = get_device_info(DEV_INFO_PROJECT_INFO, raw);
+    if (probe_status != IR_SUCCESS) {
+        printf("[Camera] Probe PROJECT failed: ir_status=%d\n", (int)probe_status);
+        if (probe_status != IR_CHECK_DONE_FAIL) {
+            return IR_NOT_GET_DEVICE_INFO;
+        }
+    } else {
+        data_rw_mark_probe_ok(4U);
+        copy_dev_info_str(s_dev_info.project_info, sizeof(s_dev_info.project_info), raw);
+    }
+
+    data_rw_set_probe_stage(2U);
+    memset(raw, 0, sizeof(raw));
+    if (get_device_info(DEV_INFO_FW_COMPILE_DATE, raw) == IR_SUCCESS) {
+        data_rw_mark_probe_ok(1U);
+        copy_dev_info_str(s_dev_info.fw_compile_date, sizeof(s_dev_info.fw_compile_date), raw);
+    }
+
+    data_rw_set_probe_stage(3U);
+    memset(raw, 0, sizeof(raw));
+    if (get_device_info(DEV_INFO_FW_BUILD_VERSION_INFO, raw) == IR_SUCCESS) {
+        data_rw_mark_probe_ok(5U);
+        copy_dev_info_str(s_dev_info.fw_build_version, sizeof(s_dev_info.fw_build_version), raw);
+    }
+
+    data_rw_set_probe_stage(4U);
+    memset(raw, 0, sizeof(raw));
+    probe_status = get_device_info(DEV_INFO_GET_PN, raw);
+    if (probe_status != IR_SUCCESS) {
+        printf("[Camera] Probe PN failed: ir_status=%d\n", (int)probe_status);
+        if (probe_status != IR_CHECK_DONE_FAIL) {
+            return IR_NOT_GET_DEVICE_INFO;
+        }
+    } else {
+        data_rw_mark_probe_ok(6U);
+        copy_dev_info_str(s_dev_info.pn, sizeof(s_dev_info.pn), raw);
+    }
+
+    data_rw_set_probe_stage(5U);
+    memset(raw, 0, sizeof(raw));
+    probe_status = get_device_info(DEV_INFO_GET_SN, raw);
+    if (probe_status != IR_SUCCESS) {
+        printf("[Camera] Probe SN failed: ir_status=%d\n", (int)probe_status);
+        if (probe_status != IR_CHECK_DONE_FAIL) {
+            return IR_NOT_GET_DEVICE_INFO;
+        }
+    } else {
+        data_rw_mark_probe_ok(7U);
+        copy_dev_info_str(s_dev_info.sn, sizeof(s_dev_info.sn), raw);
+    }
+
+    s_dev_info.probed = true;
+    printf("[Camera] Device Info Probed:\n");
+    printf("         + Project  : %s\n", s_dev_info.project_info);
+    printf("         + FW Build : %s (%s)\n", s_dev_info.fw_build_version, s_dev_info.fw_compile_date);
+    printf("         + PN / SN  : %s / %s\n", s_dev_info.pn, s_dev_info.sn);
+
+    if (out_info != NULL) {
+        *out_info = s_dev_info;
+    }
+    return IR_SUCCESS;
+}
+
+const tiny1c_device_info_t *core_get_device_info(void)
+{
+    return &s_dev_info;
+}
+
 ir_error_t core_init(uint8_t i2c_bus, uint8_t slave_addr)
 {
+    data_rw_reset_i2c_diag();
     data_rw_set_i2c_bus(i2c_bus);
     data_rw_set_slave_addr(slave_addr);
 
@@ -59,68 +153,55 @@ ir_error_t core_init(uint8_t i2c_bus, uint8_t slave_addr)
         return ret;
     }
 
-    printf("[Camera] Initialized on I2C bus %u, slave 0x%02X (7-bit 0x%02X)\n",
-           (unsigned int)i2c_bus,
-           (unsigned int)slave_addr,
-           (unsigned int)(((slave_addr == I2C_SLAVE_ID) || (slave_addr > 0x7FU))
-                              ? (slave_addr >> 1U)
-                              : slave_addr));
-    return IR_SUCCESS;
+    printf("[Camera] Initialized on I2C bus %d, slave 0x%x (7-bit 0x%x)\n",
+           (int)i2c_bus,
+           (int)slave_addr,
+           (int)(((slave_addr == I2C_SLAVE_ID) || (slave_addr > 0x7FU))
+                     ? (slave_addr >> 1U)
+                     : slave_addr));
+
+    /* Truy vấn thông tin thiết bị & phiên bản Firmware từ ASIC-2121W */
+    return core_probe_device_info(NULL);
 }
 
 ir_error_t core_start(camera_mode_t mode, uint8_t fps)
 {
-    PreviewStartParam_t preview_param;
-    preview_param.path   = PREVIEW_PATH0;
-    preview_param.source = 0U;
-    preview_param.fps    = (fps > 0U && fps <= 25U) ? fps : 25U;
-    preview_param.mode   = 8U; /* 8: VOSPI_MODE */
-
-    if (mode == MODE_DUAL) {
-        preview_param.width  = IMG_W;
-        preview_param.height = DUAL_HEIGHT;
-    } else {
-        preview_param.width  = IMG_W;
-        preview_param.height = IMG_H;
-    }
-
-    ir_error_t ret = preview_start(&preview_param);
-    if (ret != IR_SUCCESS) {
-        printf("[Camera] preview_start failed (%d)\n", ret);
-        return ret;
-    }
-
+    if (mode < MODE_IMAGE || mode > MODE_DUAL || fps == 0 || fps > 25)
+        return IR_ERROR_PARAM;
+    if (!s_dev_info.probed) return IR_NOT_GET_DEVICE_INFO;
+    ir_error_t ret = core_stop();
+    if (ret != IR_SUCCESS) return ret;
+    uint32_t hz = mode == MODE_DUAL ? THERMAL_SPI_DUAL_SCK_HZ : THERMAL_SPI_DEFAULT_SCK_HZ;
+    if (hal_spi_set_freq_hz(hz) != 0) return IR_START_STREAMING_FAIL;
+    PreviewStartParam_t cfg = {0};
+    cfg.path = PREVIEW_PATH0; cfg.source = 0; cfg.width = IMG_W;
+    cfg.height = mode == MODE_DUAL ? DUAL_HEIGHT : IMG_H;
+    cfg.fps = fps; cfg.mode = 8;
+    data_rw_set_probe_stage(6U);
+    ret = preview_start(&cfg);
+    if (ret != IR_SUCCESS) return ret;
     if (mode == MODE_TEMP) {
+        data_rw_set_probe_stage(7U);
         ret = y16_preview_start(PREVIEW_PATH0, Y16_MODE_TEMPERATURE);
         if (ret != IR_SUCCESS) {
-            printf("[Camera] y16_preview_start failed (%d)\n", ret);
+            (void)preview_stop(PREVIEW_PATH0);
             return ret;
         }
-    } else if ((mode == MODE_IMAGE) && (s_current_mode == MODE_TEMP) && s_is_started) {
-        (void)y16_preview_stop(PREVIEW_PATH0);
     }
-
     s_current_mode = mode;
-    s_is_started   = true;
-    printf("[Camera] Preview started in mode %d (%ux%u @ %u fps)\n",
-           (int)mode,
-           (unsigned int)preview_param.width,
-           (unsigned int)preview_param.height,
-           (unsigned int)preview_param.fps);
-
-    (void)trigger_shutter();
+    s_is_started = true;
     return IR_SUCCESS;
 }
 
 ir_error_t core_stop(void)
 {
-    if (!s_is_started) {
-        return IR_SUCCESS;
-    }
+    if (!s_is_started) return IR_SUCCESS;
+    ir_error_t y16 = IR_SUCCESS;
+    if (s_current_mode == MODE_TEMP) y16 = y16_preview_stop(PREVIEW_PATH0);
     ir_error_t ret = preview_stop(PREVIEW_PATH0);
-    s_is_started = false;
-    printf("[Camera] Preview stopped\n");
-    return ret;
+    /* Stop succeeded even if disabling Y16 failed; callers still see the error. */
+    if (ret == IR_SUCCESS) s_is_started = false;
+    return ret != IR_SUCCESS ? ret : y16;
 }
 
 camera_mode_t core_get_mode(void)
@@ -271,7 +352,10 @@ ir_error_t query_rect_temp(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, r
 
 ir_error_t set_palette(uint8_t palette_id)
 {
-    if ((palette_id < PSEUDO_COLOR_MODE_1) || (palette_id > PSEUDO_COLOR_MODE_11)) {
+    /* Chặn PSEUDO_COLOR_MODE_2 (Reserved trên Tiny1C theo tài liệu hãng) */
+    if ((palette_id < PSEUDO_COLOR_MODE_1) ||
+        (palette_id > PSEUDO_COLOR_MODE_11) ||
+        (palette_id == PSEUDO_COLOR_MODE_2)) {
         return IR_ERROR_PARAM;
     }
     return pseudo_color_set(PREVIEW_PATH0, (enum pseudo_color_types)palette_id);
@@ -429,9 +513,9 @@ ir_error_t core_set_env_params(float emissivity, float distance_m,
 
     uint16_t ems_cnt  = (uint16_t)(emissivity * 128.0f + 0.5f);
     uint16_t tau_cnt  = (uint16_t)(transmittance * 128.0f + 0.5f);
-    uint16_t dist_cnt = (uint16_t)(distance_m * 128.0f + 0.5f);
     uint16_t tu_k     = (uint16_t)(refl_temp_c + 273.15f + 0.5f);
     uint16_t ta_k     = (uint16_t)(atm_temp_c + 273.15f + 0.5f);
+    (void)distance_m; /* Theo Interface Description1.2.xlsx, Tiny1C chỉ hỗ trợ EMS, TAU, TU, TA, GAIN_SEL */
 
     if (ems_cnt == 0U) ems_cnt = 1U;
     if (tau_cnt == 0U) tau_cnt = 1U;
@@ -440,9 +524,6 @@ ir_error_t core_set_env_params(float emissivity, float distance_m,
     if (ret != IR_SUCCESS) return ret;
 
     ret = set_prop_tpd_params(TPD_PROP_TAU, tau_cnt);
-    if (ret != IR_SUCCESS) return ret;
-
-    ret = set_prop_tpd_params(TPD_PROP_DISTANCE, dist_cnt);
     if (ret != IR_SUCCESS) return ret;
 
     ret = set_prop_tpd_params(TPD_PROP_TU, tu_k);

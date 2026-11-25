@@ -1,7 +1,8 @@
 # Tài liệu Kiến trúc Chốt Tầng 2 (RTOS Soft-I²C Bus Driver Layer) — Điều phối Bus & Thanh ghi 16-bit trên SOPHGO SG2002
 
-Cập nhật chốt: **09-11-2026**  
-Nền tảng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V 64-bit C906L chạy FreeRTOS)**.
+Đối chiếu mã nguồn **25-11-2026**  
+Nền tảng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V 64-bit C906L chạy FreeRTOS)**.  
+Tài liệu đi kèm trong repo `freertos`: [`freertos/cvitek/driver/i2c/README.md`](../../../freertos/cvitek/driver/i2c/README.md) · [`Driver T3`](../../../freertos/cvitek/driver/sensor/tiny1C/README.md).
 
 ---
 
@@ -125,4 +126,13 @@ flowchart TD
   1. Ghi payload vào `I2C_VD_BUFFER_HLD` (`0x9D00`) / `I2C_VD_BUFFER_RW` (`0x1D00`).
   2. Lặp lại việc đọc thanh ghi `I2C_VD_BUFFER_STATUS` (`0x0200`) để chờ bit `BUSY` hạ xuống `0` (giữa các lần poll dùng `vTaskDelay()`, nhả `bus->lock`).
   3. Đọc dữ liệu kết quả trả về từ `0x1D00`.
-- Do đó, khi xây dựng **Tầng 3**, driver Tiny1C sẽ có thêm một `command_mutex` cấp thiết bị để hai Task không gửi đè hai lệnh VDCMD khác nhau xen vào giữa chu kỳ polling của nhau, trong khi `bus->lock` của Tầng 2 bảo vệ an toàn đường dây ở từng lượt đọc/ghi thanh ghi.
+- T3 hiện dùng mutex thiết bị tĩnh trong `vdcmd.c` để bảo vệ toàn bộ chuỗi lệnh. T2 khóa riêng từng transfer.
+- Về tích hợp build trên RISC-V (`riscv64`), `soft_i2c.c` cùng hai tệp T0/T1 Bitbang được biên dịch trực tiếp vào thư viện `libthermal_tiny1c.a` thông qua [`freertos/cvitek/driver/sensor/tiny1C/CMakeLists.txt`](../../../freertos/cvitek/driver/sensor/tiny1C/CMakeLists.txt) khi bật `-DTHERMAL_TINY1C=ON`.
+
+## Tiny1C trong pipeline hiện tại
+
+### Ranh giới timeout và khóa khi phục vụ VDCMD
+
+T2 nhận `timeout_ms` từ 1 đến 60.000. Chờ khóa hết thời gian trả `BB_BUSY`. Lấy được khóa nhưng đã cạn ngân sách trả `BB_TIMEOUT` trước khi chạm dây. Bộ đếm `transfers/errors` cập nhật sau khi lấy khóa, kể cả lời gọi recovery. Cả repeated START lẫn STOP thuộc cùng lời gọi T2 và dùng phần ngân sách còn lại.
+
+T3 gọi T2 nhiều lần cho một lệnh. Mutex VDCMD ở `vdcmd.c` giữ thứ tự submit → poll → đọc đáp ứng; mutex bus nhả sau mỗi transfer. Cấu hình mặc định T3 là 100 kHz, stretch 20 ms và timeout 1.000 ms cho mỗi giao dịch. Firmware trong nhật ký 18/11 override tần số xuống 20 kHz. Deadline poll VDCMD mặc định 20 s được kiểm tra giữa các lần poll và tách khỏi timeout T2. [Lộ trình T3 → App](../../Tiny-1C/LO_TRINH_DOC_T3_APP.md)

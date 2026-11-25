@@ -1,7 +1,8 @@
 # Tài liệu Kiến trúc Chốt Tầng 2 (RTOS SPI Driver Layer) — Điều phối Bus & Thiết bị trên SOPHGO SG2002
 
-Cập nhật chốt: **09-11-2026**  
-Nền tảng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V 64-bit C906L chạy FreeRTOS)**.
+Đối chiếu mã nguồn **25-11-2026**  
+Nền tảng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V 64-bit C906L chạy FreeRTOS)**.  
+Tài liệu đi kèm trong repo `freertos`: [`freertos/cvitek/driver/spi/README.md`](../../../freertos/cvitek/driver/spi/README.md) · [`Driver T3`](../../../freertos/cvitek/driver/sensor/tiny1C/README.md).
 
 ---
 
@@ -43,7 +44,7 @@ Trong kiến trúc SPI 3 tầng (`T0` $\rightarrow$ `T1` $\rightarrow$ `T2` $\ri
   2. **Quản lý phiên đa phân đoạn (Multi-segment Atomic Transfer):** Thực thi chuỗi các phân đoạn liên tiếp trong cùng một lần kéo chân CS xuống LOW (ví dụ: phát byte lệnh $\rightarrow$ chờ delay phần cứng $\rightarrow$ đọc khối dữ liệu kết quả).
   3. **Tối ưu hóa cấu hình thiết bị (Lazy Reconfiguration):** Ghi nhớ thiết bị đang hoạt động (`bus->active_dev`). Nếu giao dịch tiếp theo cùng thiết bị và tham số không đổi, T2 bỏ qua bước ghi thanh ghi phần cứng để giảm thiểu độ trễ giao tiếp.
   4. **Bộ điều phối Backend thông minh (`SPI_BACKEND_AUTO`):** Tự động phân tích kích thước từng phân đoạn (`frames`) để chọn cơ chế tối ưu (`POLL`, `IRQ`, hoặc `DMA`), đồng thời kiểm tra quyền sử dụng backend trước khi kéo chân CS.
-  5. **Quản lý Deadline & Thu hồi lỗi (Fault Recovery):** Khống chế thời gian chờ `timeout_ms`, chuyển đổi sang Tick FreeRTOS, giới hạn số chu kỳ polling tránh treo CPU; tự động chụp ảnh thanh ghi lỗi (`hal_spi_snapshot`), hủy bỏ phiên truyền (`hal_spi_abort`), nhả CS và mở khóa Mutex để bảo vệ hệ thống.
+  5. **Quản lý timeout & thu hồi lỗi (Fault Recovery):** Khống chế thời gian chờ `timeout_ms`, chuyển đổi sang Tick FreeRTOS, giới hạn số chu kỳ polling tránh treo CPU; tự động chụp ảnh thanh ghi lỗi (`hal_spi_snapshot`), hủy bỏ phiên truyền (`hal_spi_abort`), nhả CS và mở khóa Mutex để bảo vệ hệ thống.
 
 - **Ranh giới phân định (Boundary):**
   - **T2 KHÔNG làm:** Không truy cập trực tiếp địa chỉ vật lý MMIO của các thanh ghi SPI (`0x04180000`) hay bảng thanh ghi DMAC (`0x04330000`). Toàn bộ việc ghi thanh ghi IP do **Tầng 1** đảm nhiệm; toàn bộ việc cấp xung Clock, Reset SoC và điều khiển chân vật lý do **Tầng 0** đảm nhiệm.
@@ -52,7 +53,7 @@ Trong kiến trúc SPI 3 tầng (`T0` $\rightarrow$ `T1` $\rightarrow$ `T2` $\ri
 
 ## 2. Các Cấu trúc Dữ liệu Cốt lõi của Tầng 2
 
-Toàn bộ các cấu trúc dữ liệu được khai báo trong [`freertos/cvitek/driver/spi/include/spi.h`](freertos/cvitek/driver/spi/include/spi.h):
+Toàn bộ các cấu trúc dữ liệu được khai báo trong [`freertos/cvitek/driver/spi/include/spi.h`](../../../freertos/cvitek/driver/spi/include/spi.h):
 
 ### 2.1. Cấu trúc Cấu hình Bus (`spi_bus_config_t`)
 ```c
@@ -119,8 +120,8 @@ struct spi_bus {
 ## 3. Các Cơ chế Vận hành Cốt lõi của Tầng 2
 
 ### 3.1. Cơ chế Bảo vệ Đa luồng (Thread-Safety & Static Mutex)
-- Khởi tạo qua `xSemaphoreCreateMutexStatic(&bus->mutex_storage)` trong [`spi_bus_init`](/freertos/cvitek/driver/spi/src/spi.c).
-- Toàn bộ vùng nhớ Mutex được cấp phát tĩnh nằm trọn trong `spi_bus_t`, không phụ thuộc vào FreeRTOS Heap (`pvPortMalloc`), loại trừ 100% rủi ro phân mảnh bộ nhớ (Heap Fragmentation) hoặc thiếu bộ nhớ (`Out-Of-Memory`) khi chạy dài ngày.
+- Khởi tạo qua `xSemaphoreCreateMutexStatic(&bus->mutex_storage)` trong [`spi_bus_init`](../../../freertos/cvitek/driver/spi/src/spi.c).
+- Toàn bộ vùng nhớ Mutex được cấp phát tĩnh nằm trọn trong `spi_bus_t`, không phụ thuộc vào FreeRTOS Heap (`pvPortMalloc`), nên việc tạo mutex dùng vùng nhớ của đối tượng bus.
 - Mọi API truy cập bus (`spi_transfer`, `spi_bus_deinit`, `spi_bus_recover`, `spi_device_set_backend`, `spi_device_set_freq`) đều bắt buộc chiếm giữ Mutex trước khi can thiệp vào cấu trúc bus và phần cứng.
 
 ### 3.2. Cơ chế Tối ưu hóa Chuyển đổi Thiết bị (Lazy Reconfiguration)
@@ -211,27 +212,27 @@ Khi một phân đoạn gặp sự cố (quá hạn `timeout_ms` hoặc lỗi ph
 ### 4.1. Nhóm Quản trị Bus & Thiết bị
 | Hàm | Tác dụng |
 | :--- | :--- |
-| [`spi_bus_init`](/freertos/cvitek/driver/spi/src/spi.c#L173) | Khởi tạo Bus SPI, tạo static mutex bảo vệ và liên kết tài nguyên phần cứng T0/T1. |
-| [`spi_bus_deinit`]( /freertos/cvitek/driver/spi/src/spi.c#L215) | Đưa Bus SPI về trạng thái nghỉ an toàn, giải phóng thiết bị và thu hồi tài nguyên. |
-| [`spi_bus_recover`]( /freertos/cvitek/driver/spi/src/spi.c#L232) | Cưỡng bức thu hồi và làm mới Bus SPI an toàn đa luồng khi ngoại vi bị treo. |
-| [`spi_device_init`]( /freertos/cvitek/driver/spi/src/spi.c#L249) | Gắn và kiểm tra tính hợp lệ của một thiết bị ngoại vi trên Bus SPI. |
-| [`spi_device_set_backend`]( /freertos/cvitek/driver/spi/src/spi.c#L285) | Thay đổi động cơ chế truyền nhận (`POLL`, `IRQ`, `DMA`, `AUTO`) cho thiết bị. |
-| [`spi_device_set_freq`]( /freertos/cvitek/driver/spi/src/spi.c#L301) | Đổi nóng tần số xung SCK và độ trễ lấy mẫu MISO của thiết bị lúc đang chạy. |
+| [`spi_bus_init`](../../../freertos/cvitek/driver/spi/src/spi.c#L173) | Khởi tạo Bus SPI, tạo static mutex bảo vệ và liên kết tài nguyên phần cứng T0/T1. |
+| [`spi_bus_deinit`](../../../freertos/cvitek/driver/spi/src/spi.c#L215) | Đưa Bus SPI về trạng thái nghỉ an toàn, giải phóng thiết bị và thu hồi tài nguyên. |
+| [`spi_bus_recover`](../../../freertos/cvitek/driver/spi/src/spi.c#L232) | Cưỡng bức thu hồi và làm mới Bus SPI an toàn đa luồng khi ngoại vi bị treo. |
+| [`spi_device_init`](../../../freertos/cvitek/driver/spi/src/spi.c#L249) | Gắn và kiểm tra tính hợp lệ của một thiết bị ngoại vi trên Bus SPI. |
+| [`spi_device_set_backend`](../../../freertos/cvitek/driver/spi/src/spi.c#L285) | Thay đổi động cơ chế truyền nhận (`POLL`, `IRQ`, `DMA`, `AUTO`) cho thiết bị. |
+| [`spi_device_set_freq`](../../../freertos/cvitek/driver/spi/src/spi.c#L301) | Đổi nóng tần số xung SCK và độ trễ lấy mẫu MISO của thiết bị lúc đang chạy. |
 
 ### 4.2. Nhóm Truyền nhận Dữ liệu cho Sensor Driver
 | Hàm | Tác dụng |
 | :--- | :--- |
-| [`spi_transfer`]( /freertos/cvitek/driver/spi/src/spi.c#L341) | Thực thi giao dịch SPI nguyên tử đa phân đoạn, quản lý giữ/nhả CS và phục hồi lỗi. |
-| [`spi_transfer_one`]( /freertos/cvitek/driver/spi/src/spi.c#L459) | Truyền nhận 1 phân đoạn đơn lẻ (Full-Duplex, TX-only hoặc RX-only). |
-| [`spi_write_then_read`]( /freertos/cvitek/driver/spi/src/spi.c#L477) | Gửi gói lệnh (TX), đợi delay phần cứng, rồi đọc dữ liệu (RX) trong cùng 1 lần giữ CS. |
-| [`spi_write`]( /freertos/cvitek/driver/spi/include/spi.h#L232) | Gửi gói dữ liệu (TX-only), tự động bỏ qua dữ liệu thu về trên đường MISO. |
-| [`spi_read`]( /freertos/cvitek/driver/spi/include/spi.h#L244) | Đọc khối dữ liệu (RX-only), tự động phát từ nhồi `fill_word` trên đường MOSI. |
+| [`spi_transfer`](../../../freertos/cvitek/driver/spi/src/spi.c#L341) | Thực thi giao dịch SPI nguyên tử đa phân đoạn, quản lý giữ/nhả CS và phục hồi lỗi. |
+| [`spi_transfer_one`](../../../freertos/cvitek/driver/spi/src/spi.c#L459) | Truyền nhận 1 phân đoạn đơn lẻ (Full-Duplex, TX-only hoặc RX-only). |
+| [`spi_write_then_read`](../../../freertos/cvitek/driver/spi/src/spi.c#L477) | Gửi gói lệnh (TX), đợi delay phần cứng, rồi đọc dữ liệu (RX) trong cùng 1 lần giữ CS. |
+| [`spi_write`](../../../freertos/cvitek/driver/spi/include/spi.h#L232) | Gửi gói dữ liệu (TX-only), tự động bỏ qua dữ liệu thu về trên đường MISO. |
+| [`spi_read`](../../../freertos/cvitek/driver/spi/include/spi.h#L244) | Đọc khối dữ liệu (RX-only), tự động phát từ nhồi `fill_word` trên đường MOSI. |
 
 ---
 
 ## 5. Ma trận Kiểm thử & Trạng thái Xác nhận Kỹ thuật
 
-Tầng 2 được kiểm chứng toàn diện qua bộ kiểm thử tự động [`freertos/cvitek/hal/cv181x/spi/tests/test_spi.c`]( /freertos/cvitek/hal/cv181x/spi/tests/test_spi.c):
+Tầng 2 được kiểm chứng toàn diện qua bộ kiểm thử tự động [`freertos/cvitek/hal/cv181x/spi/tests/test_spi.c`](../../../freertos/cvitek/hal/cv181x/spi/tests/test_spi.c):
 
 | Test Case | Mục tiêu kiểm chứng | Kết quả |
 | :--- | :--- | :---: |
@@ -252,3 +253,11 @@ export DDR_64MB_SIZE=n
 cmake --build freertos/cvitek/build/driver --target install
 ```
 - **Kết quả:** Thư viện `libdriver.a` (chứa `spi.c.obj`) biên dịch thành công, cài đặt vào `install/lib/libdriver.a` và `install/include/driver/spi/spi.h` với **0 error, 0 warning**.
+
+## Tiny1C trong pipeline hiện tại
+
+### Hai phiên CS và giới hạn timeout ở Tiny1C
+
+T3 gọi `spi_transfer_one()` riêng cho header 512 byte và payload 98.304 byte. T2 giữ mutex và CS active-low trong từng lời gọi. Khoảng đợi 1 ms giữa hai lần gọi diễn ra sau khi CS đã nhả. Dual lặp hai cặp giao dịch cho `0xAA` và `0xCC`. Task camera tuần tự hóa toàn bộ capture cùng START, STOP và FFC.
+
+`timeout_ms` trong `spi_transfer()` dùng khi đợi mutex rồi được truyền nguyên giá trị cho từng engine của từng segment. Polling thực thi ngân sách theo số vòng `compute_poll_budget()`, IRQ/DMA có đường chờ riêng ở HAL. Tổng thời gian message còn phụ thuộc số segment, chuẩn bị backend và delay. Khi prepare IRQ/DMA thất bại, T2 trả lỗi trước khi kéo CS, không tự chọn lại polling. [Lộ trình T3 → App](../../Tiny-1C/LO_TRINH_DOC_T3_APP.md)

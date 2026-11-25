@@ -22,6 +22,9 @@
 #include "spi.h"
 #define TINY1C_HAS_T2_SPI 1
 #endif
+#if defined(__riscv) && !defined(TINY1C_HAS_T2_SPI)
+#error "Target builds require the real T2 SPI headers"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,10 +49,23 @@ spi_device_t *hal_spi_get_device(void);
 #endif
 
 /*
+ * Xác nhận từ tầng tích hợp Board rằng kênh DMA 0/1 (remap 20/21) đã được dành riêng
+ * cho SPI0 trên RTOS trước khi khởi tạo spi_bus_init().
+ */
+void hal_spi_set_dma_reserved(bool reserved);
+
+/*
+ * Đổi trực tiếp tần số xung nhịp SCK của thiết bị SPI0 Tiny1C thông qua spi_device_set_freq()
+ * ở Tầng 2 (ví dụ: 23.4375 MHz cho luồng đơn 96KB, 46.875 MHz cho luồng kép 192KB).
+ */
+int hal_spi_set_freq_hz(uint32_t sck_hz);
+uint32_t hal_spi_get_freq_hz(void);
+
+/*
  * Truyền/nhận nguyên tử một khối dữ liệu qua Tầng 2 (spi_transfer_one):
  * - Nếu tx_buf == NULL, Tầng 2/Tầng 1 tự động đẩy dummy_fill (ví dụ 0x0055) mà không tốn RAM.
- * - Với khung 96 KB (98,304 byte), Tầng 2/Tầng 1 tự động chia thành các cụm DMA 4096 byte,
- *   giữ chân CS GPIOC17 ở mức LOW xuyên suốt toàn bộ khung và đồng bộ D-Cache 64 byte.
+ * - Mặc định dùng polling. Chỉ khi đã xác nhận tài nguyên DMA trước khi khởi tạo bus,
+ *   Tầng 2 mới được phép chọn DMA. CS GPIOC17 giữ LOW xuyên suốt giao dịch.
  */
 int hal_spi_transfer_frame(const void *tx_buf, void *rx_buf, size_t len,
                            uint16_t dummy_fill, uint32_t timeout_ms);

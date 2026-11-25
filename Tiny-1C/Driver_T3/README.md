@@ -1,96 +1,34 @@
-# Trình Điều Khiển Ngoại Vi Tầng 3 – Camera Nhiệt Tiny1C (ASIC-2121W)
+# Driver T3 camera nhiệt Tiny1C
 
-Thư mục này chứa bản triển khai hoàn chỉnh và tối ưu hóa **Tầng 3 (Peripheral Sensor Driver)** cho mô-đun Camera nhiệt hồng ngoại **Tiny1C (ASIC-2121W)** trên vi xử lý **SG2002 (LicheeRV Nano)**, bám sát kiến trúc phân tầng **T0 – T1 – T2 – T3** của dự án FreeRTOS (`freertos/cvitek`).
+> **Lưu ý đồng bộ (25/11/2026):** Mã nguồn chính thức của Driver T3 cùng dịch vụ RTOS (`thermal_service.c`, `thermal_protocol.h`) được biên dịch trực tiếp vào firmware FreeRTOS tại [`freertos/cvitek/driver/sensor/tiny1C/`](../../../freertos/cvitek/driver/sensor/tiny1C/README.md). Thư mục `Doc_md/Tiny-1C/Driver_T3/` giữ bản đối chiếu tham khảo.
 
----
+T3 điều khiển ASIC Tiny1C bằng VDCMD qua Soft-I²C và thu mặt phẳng ảnh hoặc nhiệt bằng VoSPI qua SPI0. [Task RTOS (freertos)](../../../freertos/cvitek/driver/sensor/tiny1C/rtos/thermal_service.c) là caller chính, điều phối vòng đời và cung cấp buffer nhận ảnh. [Lộ trình đọc T3 → App](../LO_TRINH_DOC_T3_APP.md) lần theo một yêu cầu từ viewer đến cảm biến và đường trả dữ liệu.
 
-## 1. Kiến trúc liên kết 4 tầng (T0 → T1 → T2 → T3)
+## Mã nguồn theo thứ tự đọc
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│ TẦNG 3 (Thư mục này: /home/duong/Workspace/BKFast)                         │
-│  - Điều khiển ASIC-2121W: data_rw, vdcmd (Mutex T3), falcon_cmd, core      │
-│  - Thu nhận khung ảnh VoSPI: hal_spi, vospi (96KB Đơn / 192KB Kép)         │
-│  - Liên nhân FreeRTOS <-> Linux: ipc (Shared DDR 0x8FE80000 + Mailbox)     │
-└───────────────────┬────────────────────────────────────┬───────────────────┘
-                    │ I2C5 (Điều khiển VDCMD)            │ SPI0 (Dữ liệu VoSPI)
-                    ▼                                    ▼
-┌───────────────────────────────────────┐ ┌──────────────────────────────────┐
-│ TẦNG 2 (freertos/cvitek/driver/i2c)   │ │ TẦNG 2 (freertos/cvitek/driver/spi)│
-│  - soft_i2c_init / soft_i2c_transfer  │ │  - spi_bus_init / spi_device_init│
-│  - soft_i2c_read_reg16 / write_reg16  │ │  - spi_transfer_one / recover    │
-│  - StaticMutex bảo vệ bus I2C5        │ │  - StaticMutex + BinarySemaphore │
-└───────────────────┬───────────────────┘ └──────────────┬───────────────────┘
-                    ▼                                    ▼
-┌───────────────────────────────────────┐ ┌──────────────────────────────────┐
-│ TẦNG 1 (hal/cv181x/i2c/hal_i2c_bitbang)│ │ TẦNG 1 (hal/cv181x/spi/hal_dw_spi)│
-│  - Máy trạng thái khung I2C chuẩn     │ │  - Thanh ghi Synopsys DW SSI     │
-│  - Clock stretching & khôi phục 9 xung│ │  - Polling 2 chiều & DMA 4KB/lần │
-└───────────────────┬───────────────────┘ └──────────────┬───────────────────┘
-                    ▼                                    ▼
-┌───────────────────────────────────────┐ ┌──────────────────────────────────┐
-│ TẦNG 0 (hal_i2c_gpio_platform.c)      │ │ TẦNG 0 (hal_spi_platform*.c)     │
-│  - GPIOA15 (SCL), GPIOA27 (SDA)       │ │  - Pinmux SPI0 + CS0 GPIOC17     │
-│  - Bộ đếm thời gian rdtime 25 MHz     │ │  - DW-DMAC ch0/1 + D-Cache C906  │
-└───────────────────────────────────────┘ └──────────────────────────────────┘
+| Tệp | Trách nhiệm | Hàm nên tìm |
+| --- | --- | --- |
+| [core.c](src/core.c) | Probe, lifecycle, preview, FFC, TPD/ISP và hiệu chuẩn | `core_init`, `core_probe_device_info`, `core_start`, `core_stop`, `trigger_shutter` |
+| [falcon_cmd.c](src/falcon_cmd.c) | Đóng gói từng lệnh ASIC, chọn nhóm/lệnh con và tham số | `get_device_info`, `preview_start`, `y16_preview_start`, `ooc_b_update` |
+| [vdcmd.c](src/vdcmd.c) | Header short/standard/long 4/8/16 byte, xử lý vùng hold/RW và mutex lệnh tĩnh | `standard_cmd_read`, `standard_cmd_write`, `long_cmd_read` |
+| [data_rw.c](src/data_rw.c) | Adapter Soft-I²C, chuẩn hóa địa chỉ 7 bit, polling status và chẩn đoán | `data_rw_i2c_hw_init`, `i2c_data_write`, `i2c_check_access_done`, `delay_ms` |
+| [hal_spi.c](src/hal_spi.c) | Bind bus/device và chuyển truyền nhận xuống SPI T2 | `spi0_dsi_hw_init`, `hal_spi_set_freq_hz`, `hal_spi_transfer_frame` |
+| [vospi.c](src/vospi.c) | Header VoSPI, kiểm tra frame, capture và thống kê | `spi_stream_init`, `spi_get_frame`, `vospi_read_single_frame` |
+
+## Điều khiển qua I²C
+
+Task xác nhận ownership rồi gọi `core_init(5, I2C_SLAVE_ID)`. ID 5 là bus logic trên GPIOA15/GPIOA27. Driver chuẩn hóa `0x78` thành `0x3C`. `core_init()` khởi tạo đường điều khiển, đăng ký VDCMD và probe thông tin. `probe_ok_mask` cho biết mục nào trả thành công. Nhánh probe cho phép tiếp tục với một số lỗi status ASIC, vì vậy cần đọc mask và log để biết mục còn thiếu.
+
+Mutex thiết bị bảo vệ submit → poll → response, còn mutex Soft-I²C bảo vệ từng giao dịch. Ghi vùng hold `0x9D00` nạp dữ liệu. Đường kích hoạt dùng vùng `0x1D00` và poll `0x0200`. Deadline poll mặc định là 20 s, timeout mỗi giao dịch 1 s và giới hạn stretch 20 ms. Commit có thể đã tới camera khi đường truyền lỗi, do đó driver tránh phát lại commit. Tần số build mặc định 100 kHz. Bring-up 18/11 dùng override `THERMAL_I2C_FREQ_HZ=20000`. [Cấu hình](include/all_config.h) · [I²C T0–T2](../../I2C_Arch/README.md)
+
+## Thu ảnh qua SPI0
+
+`spi_stream_init()` chuẩn bị transport. Adapter dùng mode 3, word 8 bit, MSB-first, CS GPIOC17 và `rx_sample_dly=1`. Đường cấu hình divider tương thích lúc init có thể log 23,4375 MHz. `core_start()` đặt SCK cho cả mode đơn và kép về 11,71875 MHz theo cấu hình hiện tại. Backend mặc định polling. Task khởi động preview rồi gọi `spi_get_frame()` theo từng yêu cầu CAPTURE.
+
+Mỗi mặt phẳng dùng hai phiên SPI. Phiên đầu trao đổi 512 byte, tìm header 32 byte tại offset 64 hoặc theo heuristic đến 480 và kiểm tra bit valid. Sau khi nhả CS, driver chờ 1 ms rồi phát byte điền `0x55` cho phiên nhận 98.304 byte. Gói header hoặc payload toàn `0xFF` được xem là lỗi. Ở mode đơn, `0xAA` lấy YUYV hoặc Y16 tùy cấu hình preview. DUAL ghép YUYV `0xAA` và Y16 `0xCC`; service gắn cờ nếu hai index khác nhau. [SPI T0–T2](../../SPI_Arch/spi_driver_architecture_and_roadmap.md) · [Bring-up thực tế](../Implementation/09_board_bringup_2026-11-18.md)
+
+```bash
+make -C freertos/cvitek/driver/sensor/tiny1C test riscv-check
 ```
 
----
-
-## 2. Cấu trúc thư mục
-
-```text
-BKFast/
-├── CMakeLists.txt          # Tích hợp vào hệ thống build CMake của FreeRTOS
-├── Makefile                # Kiểm thử độc lập trên Host & kiểm tra biên dịch chéo RISC-V
-├── README.md               # Tài liệu kiến trúc và hướng dẫn sử dụng Tầng 3
-├── include/
-│   ├── all_config.h        # Hằng số phần cứng I2C5, SPI0, vùng nhớ DDR & mã lỗi
-│   ├── data_rw.h           # Giao diện đọc/ghi thanh ghi 16-bit qua I2C5 (T3 -> T2)
-│   ├── vdcmd.h             # Giao thức Short / Standard / Long VDCMD có khóa Mutex T3
-│   ├── falcon_cmd.h        # Tập lệnh điều khiển ASIC-2121W (ISP, TPD, DPC, SPI Flash)
-│   ├── hal_spi.h           # Adapter SPI0 kết nối Tầng 3 xuống Tầng 2 (spi_device_t)
-│   ├── vospi.h             # Giao thức đồng bộ gói và thu nhận khung ảnh nhiệt VoSPI
-│   ├── core.h              # API nghiệp vụ cấp cao (Vòng đời, Đo nhiệt, ISP, Hiệu chuẩn)
-│   └── ipc.h               # Giao thức liên nhân (Shared DDR 0x8FE80000 + Mailbox)
-└── src/
-    ├── data_rw.c           # Kết nối xuống soft_i2c (T2) & bb_gpio_platform (T0)
-    ├── vdcmd.c             # Khóa thiết bị StaticSemaphore_t bảo vệ trọn chuỗi VDCMD
-    ├── falcon_cmd.c        # Triển khai toàn bộ tập lệnh ASIC-2121W
-    ├── hal_spi.c           # Kết nối xuống spi_bus_t / spi_device_t (T2)
-    ├── vospi.c             # Thu nhận khung 96KB/192KB qua DMA T2 + tự động phục hồi bus
-    ├── core.c              # Quy đổi nhiệt độ 1/16K -> 0.1°C và tọa độ 1-based <-> 0-based
-    ├── ipc.c               # Đồng bộ D-Cache 64B (th.dcache.cva/iva) và xử lý lệnh Linux
-    └── main.c              # Tiến trình thermal_camera_task trên FreeRTOS
-```
-
----
-
-## 3. Các tối ưu hóa và sửa lỗi trọng tâm ở Tầng 3
-
-1. **Tuân thủ hợp đồng khóa thiết bị (Device-level Mutex) của Tầng 2 (`soft_i2c.c`)**:
-   - Một lệnh VDCMD gồm nhiều giao dịch I2C liên tiếp (`Write 0x9D00` $\rightarrow$ `Poll 0x0200` $\rightarrow$ `Read 0x1D08`). `vdcmd.c` sử dụng `StaticSemaphore_t` ở Tầng 3 để khóa toàn bộ chuỗi lệnh, ngăn các tác vụ khác xen ngang làm hỏng bộ đệm nội bộ của ASIC.
-2. **Tuân thủ hợp đồng địa chỉ 7-bit và tốc độ Standard-Mode của Tầng 1 (`hal_i2c_bitbang.c`)**:
-   - Tự động chuẩn hóa địa chỉ `0x78` (8-bit trong SDK gốc) về `0x3C` (7-bit) và khởi tạo bus ở `100 kHz` đúng giới hạn `1..100 kHz` của `bb_init()`.
-   - Với gói ghi $\le 64$ byte, gọi `soft_i2c_write_reg16()`; với gói ghi tải lớn $> 64$ byte (lên tới 256 byte), tự động đóng gói và gọi `soft_i2c_transfer()` để không bị giới hạn bởi bộ đệm tạm 66 byte của `soft_i2c_write_reg16()`.
-3. **Loại bỏ xung đột tên hàm giữa `falcon_cmd.h` và `spi.h` của Tầng 2**:
-   - Đổi tên chính thức nhóm hàm SPI Flash nội bộ của ASIC thành `falcon_spi_read` / `falcon_spi_write` (kèm macro tương thích ngược khi không nạp `spi.h` của Tầng 2).
-4. **Tối ưu hóa thu nhận khung VoSPI 96 KB / 192 KB qua Tầng 2 (`spi_transfer_one`)**:
-   - Không cần bộ đệm giả `tx_dummy` cho toàn khung 96 KB: truyền `tx_buf = NULL` và `dummy_fill = 0x0055`, Tầng 2/Tầng 1 tự động phát byte điền `0x55`, chia nhỏ thành các cụm DMA 4096 byte, giữ chân CS `GPIOC17` ở mức LOW xuyên suốt và đồng bộ D-Cache 64 byte.
-5. **Sửa các lỗi tiềm ẩn từ bản nháp `RTOS_V1`**:
-   - Sửa lỗi tràn bộ nhớ đệm 4 byte trong `short_cmd_write()` khi `byLen == 0` (truyền đúng `sizeof(vdcmd_short_header_t)` = 4 byte thay vì `sizeof(vdcmd_std_header_t)` = 8 byte).
-   - Sửa mặt nạ kiểm tra lỗi `VCMD_RST_STS_FAIL` tại thanh ghi `0x0200` thành `0x02` (khớp với `VCMD_RST_STS_BIT`).
-   - Chuẩn hóa hệ tọa độ `0-based` (`0..255`, `0..191`) sang `1-based` (`1..256`, `1..192`) khi giao tiếp với mô-đun đo nhiệt TPD của ASIC-2121W.
-
----
-
-## 4. Hướng dẫn kiểm thử biên dịch
-
-- **Kiểm thử logic độc lập trên máy chủ Linux (Host GCC)**:
-  ```bash
-  make test
-  ```
-- **Kiểm tra biên dịch chéo RISC-V 64-bit kết nối trực tiếp với T0-T1-T2 trong `freertos/cvitek`**:
-  ```bash
-  make riscv-check
-  ```
+Lần đối chiếu 25/11/2026, ba bài test host và compile RISC-V (bao gồm `thermal_service.c`) từ nguồn độc lập trong `freertos` đều đạt. `riscv-check` kiểm tra compile cùng các symbol T2 và mutex RTOS. Build firmware đầy đủ theo [hướng dẫn build và deploy](../Implementation/05_build_deploy.md).

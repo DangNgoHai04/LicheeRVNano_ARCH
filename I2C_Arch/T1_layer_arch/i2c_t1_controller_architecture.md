@@ -1,7 +1,8 @@
 # Tài liệu Kiến trúc Chốt Tầng 1 (Bitbang Controller HAL) — I²C Software Master trên SOPHGO SG2002
 
-Cập nhật chốt: **09-11-2026**  
-Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Giao thức I²C Master thuần phần mềm độc lập phần cứng)**.
+Đối chiếu mã nguồn **25-11-2026**  
+Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Giao thức I²C Master thuần phần mềm độc lập phần cứng)**.  
+Tài liệu đi kèm trong repo `freertos`: [`freertos/cvitek/hal/cv181x/i2c/README.md`](../../../freertos/cvitek/hal/cv181x/i2c/README.md).
 
 ---
 
@@ -40,7 +41,7 @@ Toàn bộ định nghĩa nằm trong [`freertos/cvitek/hal/cv181x/i2c/include/h
 | Mã trả về | Giá trị | Ý nghĩa & Hành vi trên đường dây |
 | :--- | :---: | :--- |
 | **`BB_OK`** | `0` | Toàn bộ các thông điệp (`bb_msg_t`) và điều kiện `STOP` cuối phiên đã hoàn tất thành công. |
-| **`BB_INVALID`** | `-1` | Tham số đầu vào không hợp lệ (con trỏ `NULL`, `hz` ngoài dải `1..100 kHz`, `addr > 0x7F`, đọc `len == 0`). Được kiểm tra trước khi chạm vào đường dây. |
+| **`BB_INVALID`** | `-1` | Tham số đầu vào không hợp lệ (con trỏ `NULL`, `hz` ngoài dải `1–100 kHz`, `addr > 0x7F`, đọc `len == 0`). Được kiểm tra trước khi chạm vào đường dây. |
 | **`BB_TIMEOUT`** | `-2` | Quá hạn `deadline` toàn giao dịch hoặc Slave giữ `SCL` thấp vượt quá `stretch_us`. T1 lập tức nhả cả hai dây `SCL` và `SDA` về Hi-Z. |
 | **`BB_NACK`** | `-3` | Slave không kéo `SDA` xuống thấp ở nhịp clock thứ 9 (NACK địa chỉ hoặc NACK dữ liệu). T1 dừng truyền và phát `STOP` để đóng phiên an toàn. |
 | **`BB_BUSY`** | `-4` | Đường `SDA` đang bị giữ ở mức thấp khi bắt đầu tạo `START`, khi kết thúc `STOP`, hoặc sau khi đã chạy đủ 9 xung `bb_recover()`. |
@@ -71,6 +72,7 @@ typedef struct {
     uint32_t stretch_us; /* Thời gian tối đa chờ Slave nhả SCL trong mỗi xung nhịp */
     uint64_t deadline;   /* Thời điểm hết hạn của toàn bộ phiên truyền (micro-giây) */
     bb_status_t cleanup; /* Lưu riêng kết quả phát STOP cuối phiên mà không che khuất lỗi gốc */
+    uint8_t nack_phase;  /* 0=địa chỉ msg0, 1..=byte dữ liệu msg0; bit7 (0x80)=msg1; 0xff=không NACK */
 } bb_master_t;
 ```
 
@@ -150,3 +152,11 @@ Khi một giao dịch trước đó bị gián đoạn (ví dụ Master bị res
    - Đạt **100% PASS** trên toàn bộ các kịch bản đường dây: Đọc kết hợp 16-bit register + Repeated START + ACK/NACK cuối, NACK địa chỉ, Clock Stretching hợp lệ & quá hạn, SCL bị kẹt thấp, mất quyền phân xử (`BB_ARBITRATION`), bus bận (`BB_BUSY`), cứu hộ 9 xung thành công/thất bại và kiểm tra tham số sai.
 2. **Cross-Compilation RISC-V 64-bit ([`compile-riscv.sh`](../../../freertos/cvitek/hal/cv181x/i2c/tests/compile-riscv.sh)):**
    - Biên dịch thành công với `riscv64-unknown-elf-gcc` cùng các cờ nghiêm ngặt `-Wall -Wextra -Werror`, **0 error, 0 warning**.
+
+## Tiny1C trong pipeline hiện tại
+
+### Lần theo một giao dịch CCI
+
+Đọc `0x0200` của Tiny1C tạo `S → 78 → 02 → 00 → Sr → 79 → data → NACK của master → P`. Các byte địa chỉ và byte ghi cần ACK của slave. NACK do master phát sau byte đọc cuối là một phần của giao dịch thành công. Khi slave NACK, `master.nack_phase` ghi vị trí và `master.cleanup` giữ kết quả STOP riêng. Ví dụ `0x00` là địa chỉ ghi, `0x01` là byte thanh ghi cao và `0x80` là địa chỉ đọc của thông điệp thứ hai. Trường này mã hóa gọn cho chẩn đoán CCI, vị trí rất dài có thể trùng nhau do trường chỉ rộng 8 bit.
+
+`bb_init` nhận `1–100 kHz`. Yêu cầu 20 kHz cho `half_us=25`, còn 100 kHz cho `half_us=5`. Overhead GPIO, rise time, clock stretching và lịch RTOS ảnh hưởng chu kỳ đo trên dây. Khi timeout hoặc mất phân xử, T1 nhả hai dây. Recovery là lời gọi riêng từ tầng trên. [Driver T3](../../../freertos/cvitek/driver/sensor/tiny1C/README.md)

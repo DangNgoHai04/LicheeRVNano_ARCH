@@ -1,7 +1,8 @@
 # Tài liệu Kiến trúc Chốt Tầng 0 (Platform SoC Layer) — SPI0 trên SOPHGO SG2002 (CV181x)
 
-Cập nhật chốt: **30-10-2026**
-Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V C906L chạy FreeRTOS, SPI0 qua cổng FPC2)**.
+Đối chiếu mã nguồn **25-11-2026**
+Nền tảng phần cứng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — Nhân RISC-V C906L chạy FreeRTOS, SPI0 qua cổng FPC2)**.  
+Tài liệu đi kèm trong repo `freertos`: [`freertos/cvitek/hal/cv181x/spi/README.md`](../../../freertos/cvitek/hal/cv181x/spi/README.md).
 
 ---
 
@@ -181,9 +182,17 @@ flowchart TB
 
 ---
 
-## 5. Trạng thái Xác minhHiện tại
+## 5. Trạng thái xác minh
 
 1. **Kiểm thử Đơn vị và Tích hợp trên Host (`test_spi.c`)**:
    - Đã chạy `bash freertos/cvitek/hal/cv181x/spi/tests/run.sh`: **PASS 100%** toàn bộ kịch bản (`POLL`, `IRQ`, `DMA`, `AUTO`, `LSB-first`, `Helpers`, `Fault Recovery`, chính sách mặc định chỉ `POLL`, khởi tạo trễ `prepare_irq`/`prepare_dma`, từ chối DMA khi chưa đặt `dma_resources_reserved`, truyền lỗi prepare về caller trước khi kéo CS).
 2. **Biên dịch Chéo (Cross-Compilation) cho Nhân RISC-V C906L (`riscv64-unknown-elf-gcc`)**:
    - Đã biên dịch thành công cả 3 object của HAL SPI (`hal_dw_spi.c.obj`, `hal_spi_platform.c.obj`, `hal_spi_platform_io.c.obj`) đóng gói vào `libhal.a` và driver Tầng 2 (`spi.c.obj`) đóng gói vào `libdriver.a` với cờ `-Wall -Wextra`, **0 error, 0 warning**.
+
+## Tiny1C trong pipeline hiện tại
+
+### Quyền sở hữu SPI0 trên image camera
+
+FreeRTOS dùng SSI0 tại `0x04180000`, FPC2.14 (CS0/GPIOC17), FPC2.15 (SCK), FPC2.18 (MOSI) và FPC2.17 (MISO). Kiểm tra cả quyền dùng D-PHY, pad, clock/reset và GPIO. Cờ `--resources-owned` chuyển cam kết của người triển khai đến START. Nó không chỉnh Device Tree hay gỡ driver Linux.
+
+Lần bring-up 18/11 đã xác nhận node SPI0 trên DT đang chạy là `disabled` và Linux không bind `dw_spi_mmio` vào `4180000.spi0`. Khi đổi DTS, bản FIT thuần tại `rawimages/boot.sd` mới là artifact được U-Boot trên thẻ SD này đọc trực tiếp. `fip.bin` chứa firmware RTOS. Hai artifact có vòng đời triển khai riêng. [Nhật ký board](../../Tiny-1C/Implementation/09_board_bringup_2026-11-18.md)

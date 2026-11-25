@@ -12,10 +12,10 @@ Hệ thống giao tiếp với module camera nhiệt InfiRay **Tiny1C** hoạt �
 
 | Tầng | Trách nhiệm | Source | Tài liệu Chi tiết |
 | :--- | :--- | :--- | :--- |
-| **T0 — Platform SoC** | Clock gate `GPIOA`, giả lập Open-Drain qua `GPIOA_DDR` (`DR=0`), Pinmux `A15`/`A27` (func 3) + readback, timebase `rdtime` | [`hal_i2c_gpio_platform.c`](../../freertos/cvitek/hal/cv181x/i2c/src/hal_i2c_gpio_platform.c)<br>[`hal_i2c_gpio_platform.h`](../../freertos/cvitek/hal/cv181x/i2c/include/hal_i2c_gpio_platform.h) | • [Kiến trúc T0](T0_layer_arch/i2c_t0_platform_architecture.md)<br>• [Đánh giá Source T0](T0_layer_arch/i2c_t0_source_review.md) |
-| **T1 — Bitbang HAL** | Phát START, Repeated START, STOP, truyền/nhận byte MSB-first, ACK/NACK, Clock Stretching, phát hiện Arbitration Loss, cứu hộ 9 xung SCL | [`hal_i2c_bitbang.c`](../../freertos/cvitek/hal/cv181x/i2c/src/hal_i2c_bitbang.c)<br>[`hal_i2c_bitbang.h`](../../freertos/cvitek/hal/cv181x/i2c/include/hal_i2c_bitbang.h) | • [Kiến trúc T1](T1_layer_arch/i2c_t1_controller_architecture.md)<br>• [Đánh giá Source T1](T1_layer_arch/i2c_t1_source_review.md) |
-| **T2 — RTOS Bus API** | Quản lý `StaticSemaphore_t` Mutex, ngân sách thời gian thực `timeout_ms`, helpers `soft_i2c_read_reg16` / `soft_i2c_write_reg16`, thống kê lỗi | [`soft_i2c.c`](../../freertos/cvitek/driver/i2c/src/soft_i2c.c)<br>[`soft_i2c.h`](../../freertos/cvitek/driver/i2c/include/soft_i2c.h) | • [Kiến trúc T2](T2_layer_arch/i2c_t2_driver_architecture.md)<br>• [Đánh giá Source T2](T2_layer_arch/i2c_t2_source_review.md) |
-| **Tầng 3 — Thiết bị** | Đóng gói lệnh VDCMD (Short/Standard/Long), polling trạng thái `0x0200` và đồng bộ luồng khung hình VoSPI | Chuẩn bị phát triển ở Tầng 3 | • [Hướng dẫn Tích hợp Tiny1C](tiny1c_integration.md) |
+| **T0 — Platform SoC** | Clock gate `GPIOA`, giả lập Open-Drain qua `GPIOA_DDR` (`DR=0`), bật `IOBLK PAD_PU` (`0x03001908`/`1924`), Pinmux `A15`/`A27` (func 3) + readback + idle check `50 µs`, timebase `rdtime` | [`hal_i2c_gpio_platform.c`](../../freertos/cvitek/hal/cv181x/i2c/src/hal_i2c_gpio_platform.c)<br>[`hal_i2c_gpio_platform.h`](../../freertos/cvitek/hal/cv181x/i2c/include/hal_i2c_gpio_platform.h)<br>[README T0–T1](../../freertos/cvitek/hal/cv181x/i2c/README.md) | • [Kiến trúc T0](T0_layer_arch/i2c_t0_platform_architecture.md)<br>• [Đánh giá Source T0](T0_layer_arch/i2c_t0_source_review.md) |
+| **T1 — Bitbang HAL** | Phát START, Repeated START, STOP, truyền/nhận byte MSB-first, ACK/NACK, Clock Stretching, phát hiện Arbitration Loss, `nack_phase`, cứu hộ 9 xung SCL | [`hal_i2c_bitbang.c`](../../freertos/cvitek/hal/cv181x/i2c/src/hal_i2c_bitbang.c)<br>[`hal_i2c_bitbang.h`](../../freertos/cvitek/hal/cv181x/i2c/include/hal_i2c_bitbang.h)<br>[README T0–T1](../../freertos/cvitek/hal/cv181x/i2c/README.md) | • [Kiến trúc T1](T1_layer_arch/i2c_t1_controller_architecture.md)<br>• [Đánh giá Source T1](T1_layer_arch/i2c_t1_source_review.md) |
+| **T2 — RTOS Bus API** | Quản lý `StaticSemaphore_t` Mutex, ngân sách thời gian thực `timeout_ms`, helpers `soft_i2c_read_reg16` / `soft_i2c_write_reg16`, thống kê lỗi | [`soft_i2c.c`](../../freertos/cvitek/driver/i2c/src/soft_i2c.c)<br>[`soft_i2c.h`](../../freertos/cvitek/driver/i2c/include/soft_i2c.h)<br>[README T2](../../freertos/cvitek/driver/i2c/README.md) | • [Kiến trúc T2](T2_layer_arch/i2c_t2_driver_architecture.md)<br>• [Đánh giá Source T2](T2_layer_arch/i2c_t2_source_review.md) |
+| **Tầng 3 — Thiết bị** | Đóng gói lệnh VDCMD (Short/Standard/Long), polling trạng thái `0x0200` và đồng bộ luồng khung hình VoSPI | [Driver Tiny1C (freertos)](../../freertos/cvitek/driver/sensor/tiny1C/README.md) | • [Hướng dẫn Tích hợp Tiny1C](tiny1c_integration.md) |
 
 ```mermaid
 flowchart TB
@@ -51,7 +51,7 @@ flowchart TB
   - *Lưu ý:* Sử dụng đúng nhãn GPIO trên sơ đồ chân bo mạch (`A15`, `A27`), không nhầm với số thứ tự chân vật lý 15 và 27 trên header.
 - **Giả lập Open-Drain An toàn:**
   - Thanh ghi dữ liệu `GPIOA_DR` (`0x03020000`) tại bit 15 và 27 luôn được cố định bằng `0`.
-  - Việc kéo thấp hay nhả cao chỉ thực hiện bằng cách bật/tắt bit tương ứng trong thanh ghi hướng `GPIOA_DDR` (`0x03020004`). Mức cao được tạo hoàn toàn bởi điện trở kéo lên ngoài (External Pull-Up), đảm bảo an toàn tuyệt đối khi giao tiếp với Slave và khi Slave thực hiện Clock Stretching.
+  - Việc kéo thấp hay nhả cao chỉ thực hiện bằng cách bật/tắt bit tương ứng trong thanh ghi hướng `GPIOA_DDR` (`0x03020004`). Mức cao do pull-up tạo. T0 bật pull-up pad và hệ thống phải có pull-up phù hợp với miền điện áp và rise time của bus.
 - **Phân tách với Camera MIPI và Linux:**
   - Bus `IIC4` (`CAM_SCL` / `CAM_SDA`) vẫn giữ nguyên cho Linux quản lý camera MIPI CSI truyền thống.
   - Node `i2c5` trong [`build/boards/sg200x/sg2002_licheervnano_sd/dts_riscv/sg2002_licheervnano_sd.dts`](../../build/boards/sg200x/sg2002_licheervnano_sd/dts_riscv/sg2002_licheervnano_sd.dts) đã được đặt `status = "disabled"` để Linux không gắn driver `i2c-gpio` lên `A15`/`A27`.
@@ -71,12 +71,12 @@ sequenceDiagram
     A->>P: bb_gpio_platform_init(&io, timer_hz, true)
     Note over P: Mở clk_apb_gpio, DDR=0, DR=0,<br/>Pinmux A15/A27=3, Readback
     P-->>A: BB_OK + bb_io_t hooks
-    A->>B: soft_i2c_init(&bus, &io, 100000, 1000)
-    B->>H: bb_init(&bus.master, &io, 100000, 1000)
+    A->>B: soft_i2c_init(&bus, &io, THERMAL_I2C_FREQ_HZ, 20000)
+    B->>H: bb_init(&bus.master, &io, hz, stretch_us)
     H->>P: Nhả SCL=Hi-Z, SDA=Hi-Z
     B-->>A: BB_OK (Static Mutex sẵn sàng)
 
-    A->>B: soft_i2c_read_reg16(&bus, 0x3C, 0x0200, &status, 1, 20)
+    A->>B: soft_i2c_read_reg16(&bus, 0x3C, 0x0200, &status, 1, 1000)
     B->>B: Lấy Static Mutex; tính ngân sách us còn lại
     B->>H: bb_transfer(m[0]: Write 0x0200, m[1]: Read 1B)
     H->>P: START -> 0x78 -> 0x02 -> 0x00 -> Repeated START -> 0x79 -> byte + NACK -> STOP
@@ -89,7 +89,7 @@ sequenceDiagram
 
 ## 4. Tích hợp Build và Trạng thái Xác minh Kỹ thuật
 
-Các file mã nguồn của HAL I²C và Driver I²C được tự động thu thập qua `file(GLOB _SOURCES "src/*.c")` trong [`freertos/cvitek/hal/cv181x/i2c/CMakeLists.txt`](../../freertos/cvitek/hal/cv181x/i2c/CMakeLists.txt) và [`freertos/cvitek/driver/i2c/CMakeLists.txt`](../../freertos/cvitek/driver/i2c/CMakeLists.txt) để đóng gói vào `libhal.a` và `libdriver.a`.
+Trên kiến trúc `riscv64`, nhánh I²C DW phần cứng cũ trong [`freertos/cvitek/hal/cv181x/CMakeLists.txt`](../../freertos/cvitek/hal/cv181x/CMakeLists.txt) (`# i2c`) và [`freertos/cvitek/driver/CMakeLists.txt`](../../freertos/cvitek/driver/CMakeLists.txt) đã được tắt. Thay vào đó, ba tệp nguồn Soft-I²C Bitbang T0–T2 (`hal_i2c_gpio_platform.c`, `hal_i2c_bitbang.c`, `soft_i2c.c`) được biên dịch trực tiếp vào thư viện `libthermal_tiny1c.a` thông qua [`freertos/cvitek/driver/sensor/tiny1C/CMakeLists.txt`](../../freertos/cvitek/driver/sensor/tiny1C/CMakeLists.txt) khi bật `-DTHERMAL_TINY1C=ON` ở bước build `task`.
 
 Chạy kiểm thử tự động từ thư mục gốc của repository:
 
@@ -106,11 +106,6 @@ bash freertos/cvitek/hal/cv181x/i2c/tests/compile-riscv.sh
 
 ---
 
-## 5. Lộ trình Phát triển Tiếp theo (Hướng tới Tầng 3 — Tiny1C)
+## 5. Tích hợp hiện tại với Tiny1C
 
-1. **Xây dựng Tầng 3 (`Tiny1C Driver`) trên nền `soft_i2c.h` và `spi.h`:**
-   - Viết lớp adapter kết nối `i2c_data_read()` / `i2c_data_write()` của bộ lệnh VDCMD vào [`soft_i2c_read_reg16()`](../../freertos/cvitek/driver/i2c/include/soft_i2c.h#L25) và [`soft_i2c_write_reg16()`](../../freertos/cvitek/driver/i2c/include/soft_i2c.h#L26) với địa chỉ 7-bit chuẩn `0x3C`.
-   - Bổ sung `device_mutex` ở Tầng 3 để bảo vệ toàn bộ chu trình lệnh VDCMD (`submit -> poll 0x0200 -> read response`), nhả `soft_i2c` bus mutex giữa các lượt chờ `vTaskDelay()`.
-   - Kết nối luồng thu khung hình VoSPI (`256×192`, SPI Mode 3) vào [`spi_transfer()`](../../freertos/cvitek/driver/spi/include/spi.h#L157).
-2. **Nghiệm thu trên phần cứng thực tế (Hardware Bring-up):**
-   - Xác nhận điện áp kéo lên (Pull-Up / Level Shifter) trên hai chân `A15`/`A27`, kiểm tra lệnh đọc trạng thái `0x0200` và `get_device_info` trên camera Tiny1C thật, sau đó kích hoạt `preview_start` và thu luồng ảnh/nhiệt độ qua `SPI0`.
+`thermal_service_task` gọi `core_init` để chuẩn bị I²C và probe. VDCMD giữ mutex cấp thiết bị qua nhiều giao dịch T2. SPI0 nhận phần dữ liệu điểm ảnh. Firmware mặc định chọn 100 kHz cho Soft-I²C, còn lần thu trên board 18/11 dùng override 20 kHz. Bộ host test và cross-compile T0–T2 được đối chiếu cập nhật ngày 25/11/2026. [Điểm nối I²C/SPI](tiny1c_integration.md) · [Lộ trình từ T3 đến App](../Tiny-1C/LO_TRINH_DOC_T3_APP.md)

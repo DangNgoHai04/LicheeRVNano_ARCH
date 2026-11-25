@@ -1,30 +1,18 @@
-# Đánh giá Source và Trạng thái Hoàn thiện của Tầng 2 (RTOS Soft-I²C Bus Driver Layer)
+# Đối chiếu mã nguồn T2 I2C — RTOS Soft-I²C
 
-Cập nhật: **09-11-2026**. Nền tảng mục tiêu: **LicheeRV-Nano (SOPHGO SG2002 / CV181x — FreeRTOS trên nhân RISC-V C906L)**.
+Đối chiếu ngày **25-11-2026** cho LicheeRV-Nano (SG2002/CV181x). [Bản kiến trúc](i2c_t2_driver_architecture.md) · [README Soft-I2C](../../../freertos/cvitek/driver/i2c/README.md) · [Driver T3](../../../freertos/cvitek/driver/sensor/tiny1C/README.md) · [Mã nguồn chính](../../../freertos/cvitek/driver/i2c/src/soft_i2c.c) · [Bộ test host](../../../freertos/cvitek/hal/cv181x/i2c/tests/run.sh)
 
-**Kết luận kiểm tra source:** Tầng 2 (`soft_i2c.c` và `soft_i2c.h`) đã được chuẩn hóa hoàn chỉnh, cung cấp đầy đủ cơ chế khóa tương tranh bằng `StaticSemaphore_t` (không dùng Heap), quản lý ngân sách thời gian thực kết hợp giữa chờ Mutex và truyền nhận trên dây, cùng bộ hàm `soft_i2c_read_reg16()` / `soft_i2c_write_reg16()` khớp tuyệt đối với giao thức CCI / VDCMD của cảm biến nhiệt Tiny1C. Mã nguồn đã vượt qua toàn bộ bài test trên Host và biên dịch sạch (`0 warning, 0 error`) với trình biên dịch RISC-V 64-bit.
+## Hợp đồng đọc từ mã nguồn
 
----
+| Điểm đối chiếu | Hành vi trong source |
+| --- | --- |
+| `soft_i2c_init` | Tạo mutex tĩnh trong bus và giữ bản sao bảng hook qua T1. |
+| `run` | Tính ngân sách trước khi chờ khóa. Truyền microgiây còn lại cho `bb_transfer` hoặc `bb_recover`. |
+| `soft_i2c_read_reg16` | Hai message liên tiếp, ghi hai byte register MSB-first và đọc qua repeated START. |
+| `soft_i2c_write_reg16` | Một message, buffer stack 258 byte, payload 1–256 byte. T3 còn có đường `soft_i2c_transfer` trực tiếp cho trường hợp chỉ gửi index. |
 
-## 1. Phạm vi và Nguồn đối chiếu
+### Ranh giới timeout và khóa khi phục vụ Tiny1C
 
-- **Source Tầng 2**:
-  - [`soft_i2c.c`](../../../freertos/cvitek/driver/i2c/src/soft_i2c.c): Quản lý khóa FreeRTOS Static Mutex, quy đổi ngân sách thời gian, thống kê giao dịch và triển khai các hàm helper thanh ghi 16-bit.
-  - [`soft_i2c.h`](../../../freertos/cvitek/driver/i2c/include/soft_i2c.h): Khai báo cấu trúc `soft_i2c_bus_t` và 5 hàm Public API.
-  - [`CMakeLists.txt`](../../../freertos/cvitek/driver/i2c/CMakeLists.txt): Biên dịch tự động `soft_i2c.c` vào thư viện `libdriver.a` và cài đặt header vào `install/include/driver/i2c/`.
-- **Source Tầng Dưới đối chiếu**:
-  - [Tài liệu Kiến trúc T1](../T1_layer_arch/i2c_t1_controller_architecture.md): Bộ máy trạng thái I²C Bitbang (`hal_i2c_bitbang.c`).
-  - [Tài liệu Kiến trúc T0](../T0_layer_arch/i2c_t0_platform_architecture.md): Lớp nền tảng GPIOA (`hal_i2c_gpio_platform.c`).
+T2 nhận `timeout_ms` từ 1 đến 60.000. Chờ khóa hết thời gian trả `BB_BUSY`. Lấy được khóa nhưng đã cạn ngân sách trả `BB_TIMEOUT` trước khi chạm dây. Bộ đếm `transfers/errors` cập nhật sau khi lấy khóa, kể cả lời gọi recovery. Cả repeated START lẫn STOP thuộc cùng lời gọi T2 và dùng phần ngân sách còn lại.
 
----
-
-## 2. Bảng Đối chiếu Các Hạng mục Kỹ thuật Đã Hoàn thiện ở Tầng 2
-
-| Hạng mục | Cơ chế thực thi trong Source Code | Đánh giá & Trạng thái |
-| :--- | :--- | :--- |
-| **1. Static Mutex Không Dùng Heap** | Sử dụng `xSemaphoreCreateMutexStatic(&b->lock_storage)` trong `soft_i2c_init()`. | **HOÀN THÀNH:** Loại trừ hoàn toàn phân mảnh bộ nhớ và nguy cơ hết Heap khi hệ thống chạy liên tục dài ngày. |
-| **2. Ngân sách Thời gian Thực Thống nhất** | Đo `elapsed = now_us() - begin` sau khi `xSemaphoreTake()` thành công; chỉ gọi xuống T1 nếu `elapsed < budget` với thời gian còn lại `budget - elapsed`. | **HOÀN THÀNH:** Đảm bảo thời gian thực thi tổng cộng không vượt quá deadline dự kiến của Task gọi. |
-| **3. Đọc Thanh ghi 16-bit Nguyên tử (`read_reg16`)** | Ghép 2 thông điệp (`Write 2-byte reg MSB-first` + `Read N-byte data`) trong một lệnh `soft_i2c_transfer(b, m, 2, ms)`. | **HOÀN THÀNH:** Giữ khóa Mutex xuyên suốt cả pha ghi địa chỉ thanh ghi và pha đọc dữ liệu qua `Repeated START`. |
-| **4. Ghi Thanh ghi 16-bit Không Cấp phát Động (`write_reg16`)** | Dùng mảng cục bộ `uint8_t buffer[258]` trên Stack để ghép 2 byte địa chỉ thanh ghi và tối đa 256 byte dữ liệu trong 1 thông điệp duy nhất. | **HOÀN THÀNH:** Hỗ trợ đầy đủ cả lệnh ghi thường (`64B`) lẫn lệnh nạp bộ đệm (`256B`) của Tiny1C mà không dùng `malloc`. |
-| **5. Tách biệt ABI với Driver I²C Cũ** | Giữ nguyên `i2c.h` / `i2c.c` cho các tác vụ sensor MIPI sẵn có của SDK; cung cấp header riêng `soft_i2c.h`. | **HOÀN THÀNH:** Tương thích ngược 100% với toàn bộ mã nguồn FreeRTOS hiện hành của Cvitek/Sophgo. |
-| **6. Kiểm thử Tự động & Biên dịch RISC-V** | Kiểm tra đầy đủ qua `test_i2c.c` (`run.sh`) và `compile-riscv.sh` với cờ `-Wall -Wextra -Werror`. | **HOÀN THÀNH:** Đạt **100% PASS**, sẵn sàng phục vụ phát triển Tầng 3. |
+T3 gọi T2 nhiều lần cho một lệnh. Mutex VDCMD ở `vdcmd.c` giữ thứ tự submit → poll → đọc đáp ứng; mutex bus nhả sau mỗi transfer. Trên RISC-V, `soft_i2c.c` được biên dịch vào `libthermal_tiny1c.a` qua [`tiny1C/CMakeLists.txt`](../../../freertos/cvitek/driver/sensor/tiny1C/CMakeLists.txt) khi bật `-DTHERMAL_TINY1C=ON`. Cấu hình mặc định T3 là 100 kHz, stretch 20 ms và timeout 1.000 ms cho mỗi giao dịch. Firmware trong nhật ký 18/11 override tần số xuống 20 kHz. Deadline poll VDCMD mặc định 20 s được kiểm tra giữa các lần poll và tách khỏi timeout T2. [Lộ trình T3 → App](../../Tiny-1C/LO_TRINH_DOC_T3_APP.md)

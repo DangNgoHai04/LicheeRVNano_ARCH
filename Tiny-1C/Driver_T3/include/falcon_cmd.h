@@ -23,10 +23,12 @@ enum vdcmd_driver_type {
 };
 
 enum prop_default_cfg {
-    DEF_CFG_ALL = 0,
-    DEF_CFG_TPD = 2,
-    DEF_CFG_PROP_PAGE = 3,
-    DEF_CFG_USER_CFG = 4
+    DEF_CFG_ALL        = 0, /* Khôi phục toàn bộ cấu hình mặc định */
+    DEF_CFG_TECLESS_K  = 1, /* Khôi phục bảng K không TEC */
+    DEF_CFG_TPD        = 2, /* Khôi phục tham số đo nhiệt TPD */
+    DEF_CFG_PROP_PAGE  = 3, /* Khôi phục trang thuộc tính Property Page */
+    DEF_CFG_USER_CFG   = 4, /* Khôi phục cấu hình người dùng */
+    DEF_CFG_DEAD_PIXEL = 5  /* Khôi phục bảng điểm mù (mã 0x05 theo Interface Description1.2.xlsx) */
 };
 
 enum prop_default_params {
@@ -152,18 +154,24 @@ enum mirror_flip_types {
     MIRROR_FLIP
 };
 
+/*
+ * Bảng màu giả (Pseudo Color Palette) của ASIC-2121W:
+ * Lưu ý theo tài liệu Interface Description1.2.xlsx của Tiny1C:
+ * Giá trị 2 (PSEUDO_COLOR_MODE_2) là RESERVED (không hỗ trợ trên Tiny1C).
+ * Driver Tầng 3 sẽ chủ động chặn PSEUDO_COLOR_MODE_2 để tránh lỗi tham số dưới ASIC.
+ */
 enum pseudo_color_types {
-    PSEUDO_COLOR_MODE_1 = 1,
-    PSEUDO_COLOR_MODE_2,
-    PSEUDO_COLOR_MODE_3,
-    PSEUDO_COLOR_MODE_4,
-    PSEUDO_COLOR_MODE_5,
-    PSEUDO_COLOR_MODE_6,
-    PSEUDO_COLOR_MODE_7,
-    PSEUDO_COLOR_MODE_8,
-    PSEUDO_COLOR_MODE_9,
-    PSEUDO_COLOR_MODE_10,
-    PSEUDO_COLOR_MODE_11
+    PSEUDO_COLOR_MODE_1 = 1,  /* White Hot (Trắng nóng) */
+    PSEUDO_COLOR_MODE_2,      /* RESERVED trên Tiny1C - Không sử dụng */
+    PSEUDO_COLOR_MODE_3,      /* Sexy / Ironbow */
+    PSEUDO_COLOR_MODE_4,      /* Rainbow */
+    PSEUDO_COLOR_MODE_5,      /* Aurora */
+    PSEUDO_COLOR_MODE_6,      /* Lava */
+    PSEUDO_COLOR_MODE_7,      /* Glowbow */
+    PSEUDO_COLOR_MODE_8,      /* Gradedfire */
+    PSEUDO_COLOR_MODE_9,      /* Hottest */
+    PSEUDO_COLOR_MODE_10,     /* Medical */
+    PSEUDO_COLOR_MODE_11      /* Black Hot (Đen nóng) */
 };
 
 enum zoom_scale_step {
@@ -270,6 +278,11 @@ ir_error_t tpd_get_max_min_temp_info(MaxMinTempInfo_t *max_min_temp_info);
 ir_error_t tpd_get_point_temp_info(IrPoint_t point_pos, uint16_t *point_temp_value);
 ir_error_t tpd_get_line_temp_info(IrLine_t line_pos, TpdLineRectTempInfo_t *line_temp_info);
 ir_error_t tpd_get_rect_temp_info(IrRect_t rect_pos, TpdLineRectTempInfo_t *rect_temp_info);
+/*
+ * Hàm đặt ngưỡng nhiệt độ vùng chữ nhật: có liệt kê trong bảng Excel Interface Description1.2.xlsx
+ * (dòng 28) nhưng hãng đã lược bỏ trong mã nguồn SDK V1.0.0 -> trả về IR_UNSUPPORTED_CMD.
+ */
+ir_error_t tpd_set_rect_temp_thd(TpdTempThd_t *rect_temp_thd);
 
 /* Nhóm lệnh Thu phóng kỹ thuật số (Digital Zoom) & Điểm chết (DPC) */
 ir_error_t zoom_center_up(enum preview_path path, enum zoom_scale_step scale_step);

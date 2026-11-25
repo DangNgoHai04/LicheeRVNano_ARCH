@@ -1,34 +1,3 @@
-# Prerequisites
-*.d
-
-# Object and library files
-*.o
-*.ko
-*.obj
-*.elf
-*.a
-*.lib
-*.so
-*.dylib
-
-# Executables
-thermal_test
-*.bin
-*.dis
-*.map
-
-# Build directories
 build/
-build_riscv/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile.cmake
-
-# Temporary and editor files
-*~
-*.swp
-*.swo
-.vscode/
-.idea/
-.DS_Store
+thermal_t3_host_test
+thermal_test
